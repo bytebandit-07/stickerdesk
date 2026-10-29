@@ -337,7 +337,12 @@ export class WidgetManager {
           height: targetHeight,
         });
       } else {
-        win.setSize(targetWidth, targetHeight);
+        win.setBounds({
+          x: current.x,
+          y: current.y,
+          width: targetWidth,
+          height: targetHeight,
+        });
       }
     } else if (nextBounds.x !== undefined && nextBounds.y !== undefined) {
       // ONLY MOVE - NEVER TOUCH SIZE during drag

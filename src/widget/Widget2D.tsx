@@ -53,11 +53,11 @@ export const Widget2D: React.FC = () => {
 
       if (session.mode === 'move') {
         window.stickerdesk.setWidgetBounds(widgetState.id, {
-          x: session.startWindowX + deltaX,
-          y: session.startWindowY + deltaY,
+          x: Math.round(session.startWindowX + deltaX),
+          y: Math.round(session.startWindowY + deltaY),
         });
-      } else {
-        const nextWidth = Math.max(64, Math.min(1200, session.startWidth + deltaX));
+      } else if (session.mode === 'resize') {
+        const nextWidth = Math.max(64, Math.min(1200, Math.round(session.startWidth + deltaX)));
         window.stickerdesk.setWidgetBounds(widgetState.id, {
           width: nextWidth,
         });
@@ -94,6 +94,7 @@ export const Widget2D: React.FC = () => {
 
   const handleMouseDownResize = (e: React.MouseEvent<HTMLDivElement>): void => {
     e.stopPropagation();
+    e.preventDefault();
     if (e.button !== 0 || widgetState.locked || widgetState.clickThrough) return;
     dragSessionRef.current = {
       mode: 'resize',
@@ -106,11 +107,14 @@ export const Widget2D: React.FC = () => {
   };
 
   const handleWheelResize = (e: React.WheelEvent<HTMLDivElement>): void => {
-    if (dragSessionRef.current !== null || widgetState.locked || widgetState.clickThrough) return;
-    const scaleFactor = e.deltaY < 0 ? 1.08 : 0.92;
+    // If mouse button is held down (e.g. dragging), do NOT trigger wheel resize
+    if (e.buttons > 0 || dragSessionRef.current !== null || widgetState.locked || widgetState.clickThrough) {
+      return;
+    }
+    const delta = e.deltaY < 0 ? 12 : -12;
     const nextWidth = Math.max(
       64,
-      Math.min(1200, Math.round(window.innerWidth * scaleFactor))
+      Math.min(1200, Math.round(window.innerWidth + delta))
     );
     window.stickerdesk.setWidgetBounds(widgetState.id, { width: nextWidth });
   };
@@ -185,15 +189,16 @@ export const Widget2D: React.FC = () => {
             title="Drag to resize"
             style={{
               position: 'absolute',
-              right: '4px',
-              bottom: '4px',
-              width: '14px',
-              height: '14px',
-              borderRadius: '3px',
-              backgroundColor: 'rgba(79, 70, 229, 0.85)',
-              border: '1.5px solid #ffffff',
+              right: '3px',
+              bottom: '3px',
+              width: '18px',
+              height: '18px',
+              borderRadius: '4px',
+              backgroundColor: 'rgba(79, 70, 229, 0.95)',
+              border: '2px solid #ffffff',
               cursor: 'nwse-resize',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+              boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+              zIndex: 999,
             }}
           />
         )}
