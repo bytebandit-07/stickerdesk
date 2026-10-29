@@ -194,7 +194,7 @@ export class WidgetManager {
       `INSERT INTO widgets (
         id, sticker_id, mode, x, y, width, height, monitor_id,
         opacity, locked, click_through, always_on_top, settings_json, active
-      ) VALUES (?, ?, '2d', ?, ?, ?, ?, ?, 1.0, 0, 0, 1, ?, 1)`
+      ) VALUES (?, ?, '2d', ?, ?, ?, ?, ?, 1.0, 0, 0, 0, ?, 1)`
     ).run(widgetId, stickerId, x, y, initWidth, initHeight, monitorId, JSON.stringify(defaultSettings));
 
     this.createWidget(widgetId);
@@ -253,7 +253,7 @@ export class WidgetManager {
       },
     });
 
-    win.setAlwaysOnTop(payload.alwaysOnTop, 'screen-saver');
+    win.setAlwaysOnTop(payload.alwaysOnTop);
     if (payload.clickThrough) {
       win.setIgnoreMouseEvents(true, { forward: true });
     }
@@ -433,7 +433,7 @@ export class WidgetManager {
           width: options.width,
         });
       }
-      win.setAlwaysOnTop(updatedPayload.alwaysOnTop, 'screen-saver');
+      win.setAlwaysOnTop(updatedPayload.alwaysOnTop);
       win.setIgnoreMouseEvents(updatedPayload.clickThrough, { forward: true });
       win.webContents.send('widget:state-updated', updatedPayload);
     }
@@ -521,6 +521,14 @@ export class WidgetManager {
         checked: payload.locked,
         click: () => {
           this.updateWidget(widgetId, { locked: !payload.locked });
+        },
+      },
+      {
+        label: 'Always On Top (Float Over Other Apps)',
+        type: 'checkbox',
+        checked: payload.alwaysOnTop,
+        click: () => {
+          this.updateWidget(widgetId, { alwaysOnTop: !payload.alwaysOnTop });
         },
       },
       {
