@@ -106,7 +106,7 @@ export const Widget2D: React.FC = () => {
   };
 
   const handleWheelResize = (e: React.WheelEvent<HTMLDivElement>): void => {
-    if (widgetState.locked || widgetState.clickThrough) return;
+    if (dragSessionRef.current !== null || widgetState.locked || widgetState.clickThrough) return;
     const scaleFactor = e.deltaY < 0 ? 1.08 : 0.92;
     const nextWidth = Math.max(
       64,

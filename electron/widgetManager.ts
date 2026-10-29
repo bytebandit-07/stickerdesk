@@ -70,6 +70,7 @@ const MAX_WIDGET_SIZE = 1200;
 export class WidgetManager {
   private readonly windows: Map<string, BrowserWindow> = new Map();
   private readonly aspectRatios: Map<string, number> = new Map();
+  private readonly saveBoundsTimers: Map<string, NodeJS.Timeout> = new Map();
 
   private parseSettings(jsonStr: string): WidgetSettings {
     try {
@@ -323,35 +324,43 @@ export class WidgetManager {
     const win = this.windows.get(widgetId);
     if (!win || win.isDestroyed()) return;
 
-    const current = win.getBounds();
-    const aspect = this.aspectRatios.get(widgetId) ?? current.width / Math.max(1, current.height);
+    if (nextBounds.width !== undefined) {
+      const current = win.getBounds();
+      const aspect = this.aspectRatios.get(widgetId) ?? (current.width / Math.max(1, current.height));
+      const targetWidth = Math.max(MIN_WIDGET_SIZE, Math.min(MAX_WIDGET_SIZE, Math.round(nextBounds.width)));
+      const targetHeight = Math.max(MIN_WIDGET_SIZE, Math.round(targetWidth / aspect));
+      if (nextBounds.x !== undefined && nextBounds.y !== undefined) {
+        win.setBounds({
+          x: Math.round(nextBounds.x),
+          y: Math.round(nextBounds.y),
+          width: targetWidth,
+          height: targetHeight,
+        });
+      } else {
+        win.setSize(targetWidth, targetHeight);
+      }
+    } else if (nextBounds.x !== undefined && nextBounds.y !== undefined) {
+      // ONLY MOVE - NEVER TOUCH SIZE during drag
+      win.setPosition(Math.round(nextBounds.x), Math.round(nextBounds.y));
+    }
 
-    let targetWidth = nextBounds.width !== undefined ? Math.round(nextBounds.width) : current.width;
-    targetWidth = Math.max(MIN_WIDGET_SIZE, Math.min(MAX_WIDGET_SIZE, targetWidth));
-    const targetHeight = Math.max(MIN_WIDGET_SIZE, Math.round(targetWidth / aspect));
-
-    const targetX = nextBounds.x !== undefined ? Math.round(nextBounds.x) : current.x;
-    const targetY = nextBounds.y !== undefined ? Math.round(nextBounds.y) : current.y;
-
-    win.setBounds({
-      x: targetX,
-      y: targetY,
-      width: targetWidth,
-      height: targetHeight,
-    });
-
-    const display = screen.getDisplayMatching({
-      x: targetX,
-      y: targetY,
-      width: targetWidth,
-      height: targetHeight,
-    });
-
-    getDb()
-      .prepare(
-        'UPDATE widgets SET x = ?, y = ?, width = ?, height = ?, monitor_id = ? WHERE id = ?'
-      )
-      .run(targetX, targetY, targetWidth, targetHeight, String(display.id), widgetId);
+    // Debounce SQLite write so fast mousemove doesn't thrash disk
+    const existingTimer = this.saveBoundsTimers.get(widgetId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      this.saveBoundsTimers.delete(widgetId);
+      if (win.isDestroyed()) return;
+      const b = win.getBounds();
+      const display = screen.getDisplayMatching(b);
+      getDb()
+        .prepare(
+          'UPDATE widgets SET x = ?, y = ?, width = ?, height = ?, monitor_id = ? WHERE id = ?'
+        )
+        .run(b.x, b.y, b.width, b.height, String(display.id), widgetId);
+    }, 200);
+    this.saveBoundsTimers.set(widgetId, timer);
   }
 
   public updateWidget(widgetId: string, options: WidgetUpdateOptions): WidgetStatePayload | null {
