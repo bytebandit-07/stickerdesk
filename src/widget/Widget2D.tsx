@@ -107,11 +107,15 @@ export const Widget2D: React.FC = () => {
   };
 
   const handleWheelResize = (e: React.WheelEvent<HTMLDivElement>): void => {
-    // If mouse button is held down (e.g. dragging), do NOT trigger wheel resize
+    // Only resize via wheel if user holds Ctrl or Alt key, so accidental touch or drag NEVER zooms!
+    if (!e.ctrlKey && !e.altKey) {
+      return;
+    }
     if (e.buttons > 0 || dragSessionRef.current !== null || widgetState.locked || widgetState.clickThrough) {
       return;
     }
-    const delta = e.deltaY < 0 ? 12 : -12;
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 16 : -16;
     const nextWidth = Math.max(
       64,
       Math.min(1200, Math.round(window.innerWidth + delta))
@@ -167,6 +171,7 @@ export const Widget2D: React.FC = () => {
           opacity: widgetState.opacity,
           cursor: widgetState.locked ? 'default' : 'grab',
           overflow: 'hidden',
+          touchAction: 'none',
         }}
       >
         <img

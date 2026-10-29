@@ -24,6 +24,7 @@ interface StudioState {
   fetchStickers: () => Promise<void>;
   saveSticker: (name: string, imageBase64: string) => Promise<StickerItem>;
   pinStickerToDesktop: (stickerId: string) => Promise<void>;
+  deleteSticker: (stickerId: string) => Promise<void>;
   disableAllClickThrough: () => Promise<void>;
 }
 
@@ -93,6 +94,22 @@ export const useStudioStore = create<StudioState>((set) => ({
 
   pinStickerToDesktop: async (stickerId: string): Promise<void> => {
     await window.stickerdesk.pinSticker(stickerId);
+  },
+
+  deleteSticker: async (stickerId: string): Promise<void> => {
+    const config = await window.stickerdesk.getServerConfig();
+    const response = await fetch(`${config.baseUrl}/stickers/${stickerId}`, {
+      method: 'DELETE',
+      headers: {
+        'x-stickerdesk-token': config.token,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete sticker (HTTP ${response.status})`);
+    }
+    set((state) => ({
+      stickers: state.stickers.filter((s) => s.id !== stickerId),
+    }));
   },
 
   disableAllClickThrough: async (): Promise<void> => {

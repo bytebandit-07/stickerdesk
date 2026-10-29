@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { nativeImage } from 'electron';
 import { getDb, getStickersDir } from '../db';
+import { widgetManager } from '../../widgetManager';
 
 export const stickersRouter = Router();
 
@@ -103,4 +104,39 @@ stickersRouter.post('/', (req: Request, res: Response) => {
   }
 
   res.status(201).json(parsedRow.data);
+});
+
+stickersRouter.delete('/:id', (req: Request, res: Response) => {
+  const stickerId = req.params.id;
+  const db = getDb();
+  const row = db.prepare('SELECT file_path, thumb_path FROM stickers WHERE id = ?').get(stickerId) as {
+    file_path: string;
+    thumb_path: string;
+  } | undefined;
+
+  if (!row) {
+    res.status(404).json({ error: 'Sticker not found' });
+    return;
+  }
+
+  // 1. Close any active desktop widgets for this sticker
+  widgetManager.closeWidgetsForSticker(stickerId);
+
+  // 2. Delete image files from disk
+  const stickersDir = getStickersDir();
+  try {
+    fs.unlinkSync(path.join(stickersDir, row.file_path));
+  } catch {
+    // File might already be gone
+  }
+  try {
+    fs.unlinkSync(path.join(stickersDir, row.thumb_path));
+  } catch {
+    // Thumbnail might already be gone
+  }
+
+  // 3. Delete from SQLite (cascades to widgets table)
+  db.prepare('DELETE FROM stickers WHERE id = ?').run(stickerId);
+
+  res.status(204).end();
 });

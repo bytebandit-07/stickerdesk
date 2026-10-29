@@ -11,6 +11,7 @@ export const Library: React.FC = () => {
     openEditorWithFile,
     setActiveView,
     pinStickerToDesktop,
+    deleteSticker,
     disableAllClickThrough,
   } = useStudioStore();
 
@@ -223,24 +224,46 @@ export const Library: React.FC = () => {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => void pinStickerToDesktop(sticker.id)}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  backgroundColor: '#10b981',
-                  color: '#fff',
-                  fontWeight: 600,
-                  fontSize: '0.82rem',
-                  cursor: 'pointer',
-                  marginTop: 'auto',
-                }}
-              >
-                Pin to Desktop
-              </button>
+              <div style={{ display: 'flex', gap: '8px', width: '100%', marginTop: 'auto' }}>
+                <button
+                  type="button"
+                  onClick={() => void pinStickerToDesktop(sticker.id)}
+                  style={{
+                    flex: 1,
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: '#10b981',
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Pin to Desktop
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Delete "${sticker.name}"? This will also remove any of its desktop widgets.`)) {
+                      void deleteSticker(sticker.id);
+                    }
+                  }}
+                  title="Delete Sticker"
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid #4a2020',
+                    backgroundColor: '#2a1515',
+                    color: '#f87171',
+                    fontWeight: 600,
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
             </div>
           ))}
         </div>

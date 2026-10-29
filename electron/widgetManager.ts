@@ -255,6 +255,8 @@ export class WidgetManager {
     });
 
     win.setAlwaysOnTop(payload.alwaysOnTop);
+    win.webContents.setVisualZoomLevelLimits(1, 1);
+    win.webContents.setZoomLevel(0);
     if (payload.clickThrough) {
       win.setIgnoreMouseEvents(true, { forward: true });
     }
@@ -481,6 +483,14 @@ export class WidgetManager {
     }
     this.windows.delete(widgetId);
     this.aspectRatios.delete(widgetId);
+  }
+
+  public closeWidgetsForSticker(stickerId: string): void {
+    const db = getDb();
+    const rows = db.prepare('SELECT id FROM widgets WHERE sticker_id = ?').all() as Array<{ id: string }>;
+    for (const r of rows) {
+      this.closeWidget(r.id);
+    }
   }
 
   /**
