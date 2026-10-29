@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en" style="background: transparent; margin: 0; padding: 0; overflow: hidden;">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' http://127.0.0.1:* data: blob:;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StickerDesk Widget</title>
+  </head>
+  <body style="margin: 0; padding: 0; background: transparent; overflow: hidden; user-select: none;">
+    <div id="widget-root"></div>
+    <script type="module" src="/src/widget/main.tsx"></script>
+  </body>
+</html>
