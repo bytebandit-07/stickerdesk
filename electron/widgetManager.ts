@@ -142,6 +142,7 @@ export class WidgetManager {
   private readonly windows: Map<string, BrowserWindow> = new Map();
 
   private readonly aspectRatios: Map<string, number> = new Map();
+  private lastContextMenuTime = 0;
 
 
 
@@ -397,7 +398,7 @@ export class WidgetManager {
 
         opacity, locked, click_through, always_on_top, settings_json, active
 
-      ) VALUES (?, ?, '2d', ?, ?, ?, ?, ?, 1.0, 0, 0, 1, ?, 1)`
+      ) VALUES (?, ?, '2d', ?, ?, ?, ?, ?, 1.0, 0, 0, 0, ?, 1)`
 
     ).run(
 
@@ -512,6 +513,7 @@ export class WidgetManager {
       hasShadow: false,
 
       backgroundColor: '#00000000',
+      type: 'toolbar',
 
       webPreferences: {
 
@@ -529,9 +531,26 @@ export class WidgetManager {
 
 
 
-    win.setAlwaysOnTop(payload.alwaysOnTop, 'screen-saver');
+    if (payload.alwaysOnTop) {
+      win.setAlwaysOnTop(true, 'floating');
+    } else {
+      win.setAlwaysOnTop(false);
+    }
 
     this.applyClickThroughState(win, payload.clickThrough);
+
+    if (process.platform === 'win32') {
+      win.hookWindowMessage(0x00a5, () => {
+        this.showContextMenu(widgetId);
+      });
+      win.hookWindowMessage(0x007b, () => {
+        this.showContextMenu(widgetId);
+      });
+    }
+
+    win.webContents.on('context-menu', () => {
+      this.showContextMenu(widgetId);
+    });
 
 
 
@@ -887,7 +906,11 @@ export class WidgetManager {
 
       }
 
-      win.setAlwaysOnTop(updatedPayload.alwaysOnTop, 'screen-saver');
+      if (updatedPayload.alwaysOnTop) {
+        win.setAlwaysOnTop(true, 'floating');
+      } else {
+        win.setAlwaysOnTop(false);
+      }
 
       this.applyClickThroughState(win, updatedPayload.clickThrough);
 
@@ -1046,7 +1069,14 @@ export class WidgetManager {
       { type: 'separator' },
 
       {
-
+        label: 'Always on Top',
+        type: 'checkbox',
+        checked: payload.alwaysOnTop,
+        click: () => {
+          this.updateWidget(widgetId, { alwaysOnTop: !payload.alwaysOnTop });
+        },
+      },
+      {
         label: 'Lock Position',
 
         type: 'checkbox',

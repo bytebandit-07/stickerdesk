@@ -307,6 +307,29 @@ export const Library: React.FC = () => {
 
 
 
+  
+  const handleToggleWidgetAlwaysOnTop = async (widget: ActiveWidgetRow): Promise<void> => {
+    setLocalError(null);
+    try {
+      const config = await window.stickerdesk.getServerConfig();
+      const nextState = widget.always_on_top === 0;
+      const res = await fetch(`${config.baseUrl}/widgets/${encodeURIComponent(widget.id)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-stickerdesk-token': config.token,
+        },
+        body: JSON.stringify({ always_on_top: nextState }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to update widget always-on-top (HTTP ${res.status})`);
+      }
+      await fetchActiveWidgets();
+    } catch (err: unknown) {
+      setLocalError(err instanceof Error ? err.message : 'Failed to toggle always-on-top');
+    }
+  };
+
   const handleCloseWidget = async (widgetId: string): Promise<void> => {
 
     setLocalError(null);
@@ -762,6 +785,24 @@ export const Library: React.FC = () => {
                     Lock: {isLocked ? 'ON' : 'OFF'}
 
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleWidgetAlwaysOnTop(w)}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: '5px',
+                      border: '1px solid #444',
+                      backgroundColor: w.always_on_top === 1 ? '#8b5cf6' : '#2d2d2d',
+                      color: w.always_on_top === 1 ? '#fff' : '#ccc',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    On Top: {w.always_on_top === 1 ? 'ON' : 'OFF'}
+                  </button>
+
 
 
 

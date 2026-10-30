@@ -44,11 +44,13 @@ export function initDb(userDataPath: string): Database.Database {
       opacity REAL NOT NULL DEFAULT 1.0,
       locked INTEGER NOT NULL DEFAULT 0,
       click_through INTEGER NOT NULL DEFAULT 0,
-      always_on_top INTEGER NOT NULL DEFAULT 1,
+      always_on_top INTEGER NOT NULL DEFAULT 0,
       settings_json TEXT NOT NULL DEFAULT '{}',
       active INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (sticker_id) REFERENCES stickers(id) ON DELETE CASCADE
     );
+
+    UPDATE widgets SET always_on_top = 0 WHERE always_on_top = 1;
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
