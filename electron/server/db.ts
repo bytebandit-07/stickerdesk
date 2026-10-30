@@ -50,13 +50,23 @@ export function initDb(userDataPath: string): Database.Database {
       FOREIGN KEY (sticker_id) REFERENCES stickers(id) ON DELETE CASCADE
     );
 
-    UPDATE widgets SET always_on_top = 0 WHERE always_on_top = 1;
-
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
   `);
+
+  // One-time migration to reset existing widgets to desktop Z-order (always_on_top = 0)
+  const migrationCheck = db
+    .prepare("SELECT value FROM settings WHERE key = 'desktop_z_order_migrated_v1'")
+    .get() as { value: string } | undefined;
+
+  if (!migrationCheck) {
+    db.exec('UPDATE widgets SET always_on_top = 0 WHERE always_on_top = 1;');
+    db.prepare(
+      "INSERT OR REPLACE INTO settings (key, value) VALUES ('desktop_z_order_migrated_v1', 'true')"
+    ).run();
+  }
 
   dbInstance = db;
   return db;

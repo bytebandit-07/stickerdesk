@@ -46,12 +46,21 @@ export const Widget2D: React.FC = () => {
   useEffect(() => {
     const handleWindowMouseMove = (e: MouseEvent): void => {
       const session = dragSessionRef.current;
-      if (!session || !widgetState || widgetState.locked) return;
+      if (!session || !widgetState || widgetState.locked || widgetState.clickThrough) {
+        return;
+      }
+
+      // If left mouse button is no longer held down, terminate session immediately
+      if ((e.buttons & 1) === 0) {
+        dragSessionRef.current = null;
+        return;
+      }
 
       const deltaX = e.screenX - session.startCursorScreenX;
       const deltaY = e.screenY - session.startCursorScreenY;
 
       if (session.mode === 'move') {
+        // Strictly update X and Y only — never recompute width on move
         window.stickerdesk.setWidgetBounds(widgetState.id, {
           x: Math.round(session.startWindowX + deltaX),
           y: Math.round(session.startWindowY + deltaY),
@@ -81,10 +90,7 @@ export const Widget2D: React.FC = () => {
   }
 
   const handleMouseDownMove = (e: React.MouseEvent<HTMLDivElement>): void => {
-    if (e.button === 2) {
-      // Right click: handled by onContextMenu
-      return;
-    }
+    // Only initiate drag on primary left-click (button === 0)
     if (e.button !== 0 || widgetState.locked || widgetState.clickThrough) return;
     dragSessionRef.current = {
       mode: 'move',
@@ -110,17 +116,20 @@ export const Widget2D: React.FC = () => {
   };
 
   const handleWheelResize = (e: React.WheelEvent<HTMLDivElement>): void => {
-    // Only zoom via wheel if user holds Ctrl key to prevent accidental trackpad auto-zoom!
-    if (!e.ctrlKey) {
+    // Require Ctrl+Wheel and ensure no drag/resize is active to prevent trackpad auto-zoom
+    if (
+      !e.ctrlKey ||
+      widgetState.locked ||
+      widgetState.clickThrough ||
+      dragSessionRef.current !== null ||
+      e.buttons !== 0
+    ) {
       return;
     }
-    if (widgetState.locked || widgetState.clickThrough || dragSessionRef.current !== null) {
-      return;
-    }
-    const delta = e.deltaY < 0 ? 16 : -16;
+    const scaleFactor = e.deltaY < 0 ? 1.06 : 0.94;
     const nextWidth = Math.max(
       64,
-      Math.min(1200, Math.round(window.innerWidth + delta))
+      Math.min(1200, Math.round(window.innerWidth * scaleFactor))
     );
     window.stickerdesk.setWidgetBounds(widgetState.id, { width: nextWidth });
   };
@@ -128,6 +137,7 @@ export const Widget2D: React.FC = () => {
   const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>): void => {
     e.preventDefault();
     e.stopPropagation();
+    dragSessionRef.current = null;
     window.stickerdesk.showWidgetContextMenu(widgetState.id);
   };
 
@@ -194,7 +204,7 @@ export const Widget2D: React.FC = () => {
         {showResizeHandle && (
           <div
             onMouseDown={handleMouseDownResize}
-            title="Drag to resize"
+            title="Drag to resize (or Ctrl + Scroll)"
             style={{
               position: 'absolute',
               right: '4px',
@@ -202,11 +212,10 @@ export const Widget2D: React.FC = () => {
               width: '14px',
               height: '14px',
               borderRadius: '3px',
-              backgroundColor: 'rgba(79, 70, 229, 0.95)',
+              backgroundColor: 'rgba(79, 70, 229, 0.9)',
               border: '1.5px solid #ffffff',
               cursor: 'nwse-resize',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
-              zIndex: 999,
+              boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
             }}
           />
         )}
