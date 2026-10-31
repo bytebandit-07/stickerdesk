@@ -1,5 +1,18 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useStudioStore } from '../../store/useStudioStore';
+import type { Sticker3DTheme, TiltMode, IdleAnimation } from '../../../electron/widgetManager';
+import type { PokemonCardData } from '../../types/pokemon';
+import { PokemonCard } from '../../components/pokemon/PokemonCard';
+import rawPokemonCards from '../../data/pokemonCards.json';
+
+const pokemonCardsList = rawPokemonCards as PokemonCardData[];
+
+interface ParsedWidgetSettings {
+  animation: IdleAnimation;
+  theme: Sticker3DTheme;
+  tiltMode: TiltMode;
+  shadowEnabled: boolean;
+}
 
 interface ActiveWidgetRow {
   id: string;
@@ -18,6 +31,88 @@ interface ActiveWidgetRow {
   active: number;
 }
 
+function parseWidgetSettingsSafe(jsonStr: string): ParsedWidgetSettings {
+  const defaults: ParsedWidgetSettings = {
+    animation: 'none',
+    theme: 'vinyl',
+    tiltMode: 'subtle',
+    shadowEnabled: true,
+  };
+  try {
+    const parsed = JSON.parse(jsonStr) as Partial<ParsedWidgetSettings>;
+    return {
+      animation:
+        parsed.animation === 'float' ||
+        parsed.animation === 'spin' ||
+        parsed.animation === 'sway' ||
+        parsed.animation === 'none'
+          ? parsed.animation
+          : defaults.animation,
+      theme:
+        parsed.theme === 'vinyl' ||
+        parsed.theme === 'holographic' ||
+        parsed.theme === 'epoxy' ||
+        parsed.theme === 'enamel'
+          ? parsed.theme
+          : defaults.theme,
+      tiltMode:
+        parsed.tiltMode === 'none' ||
+        parsed.tiltMode === 'subtle' ||
+        parsed.tiltMode === 'dynamic'
+          ? parsed.tiltMode
+          : defaults.tiltMode,
+      shadowEnabled:
+        typeof parsed.shadowEnabled === 'boolean'
+          ? parsed.shadowEnabled
+          : defaults.shadowEnabled,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+async function cardImageToBase64(url: string): Promise<string> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to load card image (HTTP ${res.status})`);
+    }
+    const blob = await res.blob();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') {
+          resolve(reader.result);
+        } else {
+          reject(new Error('Failed to convert card image blob to base64'));
+        }
+      };
+      reader.onerror = () => reject(new Error('FileReader error while reading card blob'));
+      reader.readAsDataURL(blob);
+    });
+  } catch (fetchErr) {
+    // Fallback to Image element if fetch is blocked
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Failed to create 2D canvas context'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = () =>
+        reject(new Error(fetchErr instanceof Error ? fetchErr.message : 'Failed to load card image'));
+      img.src = url;
+    });
+  }
+}
+
 export const Library: React.FC = () => {
   const {
     stickers,
@@ -32,10 +127,17 @@ export const Library: React.FC = () => {
   } = useStudioStore();
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [activeTab, setActiveTab] = useState<'stickers' | 'pokemon'>('stickers');
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [activeWidgets, setActiveWidgets] = useState<ActiveWidgetRow[]>([]);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [localSuccess, setLocalSuccess] = useState<string | null>(null);
+
+  // Pokemon Vault filter and search
+  const [pokemonSearch, setPokemonSearch] = useState<string>('');
+  const [pokemonFilter, setPokemonFilter] = useState<string>('all');
+  const [pinningCardId, setPinningCardId] = useState<string | null>(null);
 
   const fetchActiveWidgets = useCallback(async () => {
     try {
@@ -108,70 +210,61 @@ export const Library: React.FC = () => {
     }
   };
 
-  const handleToggleWidgetAlwaysOnTop = async (widget: ActiveWidgetRow): Promise<void> => {
+  const patchWidget = async (
+    widgetId: string,
+    payload: Record<string, unknown>
+  ): Promise<void> => {
     setLocalError(null);
     try {
       const config = await window.stickerdesk.getServerConfig();
-      const nextState = widget.always_on_top === 0;
-      const res = await fetch(`${config.baseUrl}/widgets/${encodeURIComponent(widget.id)}`, {
+      const res = await fetch(`${config.baseUrl}/widgets/${encodeURIComponent(widgetId)}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
           'x-stickerdesk-token': config.token,
         },
-        body: JSON.stringify({ always_on_top: nextState }),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to update widget always-on-top (HTTP ${res.status})`);
-      }
-      await fetchActiveWidgets();
-    } catch (err: unknown) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to toggle Always on Top');
-    }
-  };
-
-  const handleToggleWidgetClickThrough = async (widget: ActiveWidgetRow): Promise<void> => {
-    setLocalError(null);
-    try {
-      const config = await window.stickerdesk.getServerConfig();
-      const nextState = widget.click_through === 0;
-      const res = await fetch(`${config.baseUrl}/widgets/${encodeURIComponent(widget.id)}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-stickerdesk-token': config.token,
-        },
-        body: JSON.stringify({ click_through: nextState }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         throw new Error(`Failed to update widget (HTTP ${res.status})`);
       }
       await fetchActiveWidgets();
     } catch (err: unknown) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to toggle click-through');
+      setLocalError(err instanceof Error ? err.message : 'Failed to update widget');
     }
   };
 
+  const handleToggleWidgetMode = async (widget: ActiveWidgetRow): Promise<void> => {
+    const nextMode = widget.mode === '2d' ? '3d' : '2d';
+    await patchWidget(widget.id, { mode: nextMode });
+  };
+
+  const handleChangeWidgetTheme = async (
+    widget: ActiveWidgetRow,
+    theme: Sticker3DTheme
+  ): Promise<void> => {
+    await patchWidget(widget.id, { settings: { theme } });
+  };
+
+  const handleCycleWidgetTilt = async (
+    widget: ActiveWidgetRow,
+    currentTilt: TiltMode
+  ): Promise<void> => {
+    const order: TiltMode[] = ['none', 'subtle', 'dynamic'];
+    const nextTilt = order[(order.indexOf(currentTilt) + 1) % order.length];
+    await patchWidget(widget.id, { settings: { tiltMode: nextTilt } });
+  };
+
+  const handleToggleWidgetAlwaysOnTop = async (widget: ActiveWidgetRow): Promise<void> => {
+    await patchWidget(widget.id, { always_on_top: widget.always_on_top === 0 });
+  };
+
+  const handleToggleWidgetClickThrough = async (widget: ActiveWidgetRow): Promise<void> => {
+    await patchWidget(widget.id, { click_through: widget.click_through === 0 });
+  };
+
   const handleToggleWidgetLock = async (widget: ActiveWidgetRow): Promise<void> => {
-    setLocalError(null);
-    try {
-      const config = await window.stickerdesk.getServerConfig();
-      const nextState = widget.locked === 0;
-      const res = await fetch(`${config.baseUrl}/widgets/${encodeURIComponent(widget.id)}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-stickerdesk-token': config.token,
-        },
-        body: JSON.stringify({ locked: nextState }),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to update widget lock (HTTP ${res.status})`);
-      }
-      await fetchActiveWidgets();
-    } catch (err: unknown) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to toggle lock');
-    }
+    await patchWidget(widget.id, { locked: widget.locked === 0 });
   };
 
   const handleCloseWidget = async (widgetId: string): Promise<void> => {
@@ -194,16 +287,102 @@ export const Library: React.FC = () => {
   };
 
   const handleDisableAllClickThrough = async (): Promise<void> => {
+    await disableAllClickThrough();
+    await fetchActiveWidgets();
+  };
+
+  const handlePinPokemonCard = async (card: PokemonCardData): Promise<void> => {
     setLocalError(null);
+    setLocalSuccess(null);
+    setPinningCardId(card.id);
+
     try {
-      await disableAllClickThrough();
-      await fetchActiveWidgets();
+      const config = await window.stickerdesk.getServerConfig();
+      const imgUrl = card.images.small || card.images.large || `/img/pokemon/cards/${card.id}.png`;
+      const base64 = await cardImageToBase64(imgUrl);
+
+      // 1. Save sticker in library
+      const createRes = await fetch(`${config.baseUrl}/stickers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-stickerdesk-token': config.token,
+        },
+        body: JSON.stringify({
+          name: `${card.name} (${card.rarity || 'Holo'})`,
+          imageBase64: base64,
+        }),
+      });
+
+      if (!createRes.ok) {
+        throw new Error(`Failed to create sticker for ${card.name}`);
+      }
+
+      const created = (await createRes.json()) as { id: string };
+
+      // 2. Pin to desktop directly via window.stickerdesk API
+      const pinned = await window.stickerdesk.pinSticker(created.id);
+
+      // 3. Set widget to 3D mode with Holographic Foil theme and Dynamic tilt
+      await fetch(`${config.baseUrl}/widgets/${encodeURIComponent(pinned.id)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-stickerdesk-token': config.token,
+        },
+        body: JSON.stringify({
+          mode: '3d',
+          settings: {
+            theme: 'holographic',
+            tiltMode: 'dynamic',
+            shadowEnabled: true,
+          },
+        }),
+      });
+
+      setLocalSuccess(`✨ ${card.name} pinned to desktop in 3D Holographic Foil!`);
+      await Promise.all([fetchStickers(), fetchActiveWidgets()]);
     } catch (err: unknown) {
-      setLocalError(
-        err instanceof Error ? err.message : 'Failed to disable click-through on widgets'
-      );
+      setLocalError(err instanceof Error ? err.message : 'Failed to pin Pokemon card');
+    } finally {
+      setPinningCardId(null);
     }
   };
+
+  const filteredPokemon = useMemo(() => {
+    const q = pokemonSearch.trim().toLowerCase();
+    return pokemonCardsList.filter((c) => {
+      const matchesSearch =
+        q === '' ||
+        c.name.toLowerCase().includes(q) ||
+        c.number.includes(q) ||
+        (c.subtypes || []).some((s) => s.toLowerCase().includes(q));
+
+      if (!matchesSearch) return false;
+
+      if (pokemonFilter === 'all') return true;
+      const rarity = (c.rarity || '').toLowerCase();
+      const subtypes = (c.subtypes || []).map((s) => s.toLowerCase());
+
+      if (pokemonFilter === 'secret') {
+        return rarity.includes('secret') || rarity.includes('rainbow');
+      }
+      if (pokemonFilter === 'vmax') {
+        return subtypes.includes('vmax') || subtypes.includes('vstar');
+      }
+      if (pokemonFilter === 'radiant') {
+        return subtypes.includes('radiant');
+      }
+      if (pokemonFilter === 'trainer') {
+        return rarity.includes('trainer gallery');
+      }
+      if (pokemonFilter === 'amazing') {
+        return rarity.includes('amazing');
+      }
+
+      return true;
+    });
+  }, [pokemonSearch, pokemonFilter]);
 
   return (
     <main
@@ -232,13 +411,54 @@ export const Library: React.FC = () => {
           gap: '12px',
         }}
       >
-        {stickers.length === 0 ? (
-          <h1 style={{ fontSize: '1.25rem', fontWeight: 500, margin: 0 }}>Library (empty)</h1>
-        ) : (
-          <h1 style={{ fontSize: '1.25rem', fontWeight: 500, margin: 0 }}>
-            Library ({stickers.length})
-          </h1>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <h1 style={{ fontSize: '1.25rem', fontWeight: 600, margin: 0 }}>Library</h1>
+          <div
+            style={{
+              display: 'flex',
+              backgroundColor: '#1f1f1f',
+              padding: '3px',
+              borderRadius: '8px',
+              border: '1px solid #333',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setActiveTab('stickers')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: activeTab === 'stickers' ? '#4f46e5' : 'transparent',
+                color: activeTab === 'stickers' ? '#fff' : '#aaa',
+                fontWeight: 600,
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+              }}
+            >
+              🖼️ My Stickers ({stickers.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('pokemon')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: activeTab === 'pokemon' ? '#ec4899' : 'transparent',
+                color: activeTab === 'pokemon' ? '#fff' : '#aaa',
+                fontWeight: 600,
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              ✨ Pokémon Holo Vault ({pokemonCardsList.length})
+            </button>
+          </div>
+        </div>
 
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
           <input
@@ -336,6 +556,15 @@ export const Library: React.FC = () => {
               const isAlwaysOnTop = w.always_on_top === 1;
               const isClickThrough = w.click_through === 1;
               const isLocked = w.locked === 1;
+              const is3D = w.mode === '3d';
+              const settings = parseWidgetSettingsSafe(w.settings_json);
+
+              const tiltLabel =
+                settings.tiltMode === 'none'
+                  ? 'Still'
+                  : settings.tiltMode === 'subtle'
+                  ? 'Subtle 5°'
+                  : 'Dynamic 15°';
 
               return (
                 <div
@@ -343,6 +572,7 @@ export const Library: React.FC = () => {
                   style={{
                     display: 'flex',
                     alignItems: 'center',
+                    flexWrap: 'wrap',
                     gap: '8px',
                     padding: '6px 10px',
                     backgroundColor: '#222222',
@@ -376,6 +606,72 @@ export const Library: React.FC = () => {
                   >
                     {parentSticker?.name ?? 'Sticker'}
                   </span>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleWidgetMode(w)}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: '5px',
+                      border: '1px solid #444',
+                      backgroundColor: is3D ? '#ec4899' : '#2d2d2d',
+                      color: is3D ? '#fff' : '#ccc',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    Mode: {w.mode.toUpperCase()}
+                  </button>
+
+                  {is3D && (
+                    <>
+                      <select
+                        value={settings.theme}
+                        onChange={(e) =>
+                          void handleChangeWidgetTheme(
+                            w,
+                            e.target.value as Sticker3DTheme
+                          )
+                        }
+                        title="3D Sticker Theme"
+                        style={{
+                          padding: '3px 6px',
+                          borderRadius: '5px',
+                          border: '1px solid #444',
+                          backgroundColor: '#141414',
+                          color: '#f3f4f6',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <option value="vinyl">Theme: Vinyl Die-Cut</option>
+                        <option value="holographic">Theme: Holo Foil</option>
+                        <option value="epoxy">Theme: Epoxy Dome</option>
+                        <option value="enamel">Theme: Enamel Pin</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleCycleWidgetTilt(w, settings.tiltMode)}
+                        title="Cycle 3D Motion / Parallax Tilt"
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: '5px',
+                          border: '1px solid #444',
+                          backgroundColor:
+                            settings.tiltMode === 'none' ? '#2d2d2d' : '#0ea5e9',
+                          color: settings.tiltMode === 'none' ? '#ccc' : '#fff',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          fontSize: '0.75rem',
+                        }}
+                      >
+                        Tilt: {tiltLabel}
+                      </button>
+                    </>
+                  )}
 
                   <button
                     type="button"
@@ -452,189 +748,352 @@ export const Library: React.FC = () => {
         )}
       </section>
 
+      {localSuccess && (
+        <p
+          style={{
+            backgroundColor: '#064e3b',
+            color: '#a7f3d0',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            fontSize: '0.85rem',
+            marginBottom: '16px',
+            fontWeight: 500,
+          }}
+        >
+          {localSuccess}
+        </p>
+      )}
+
       {isLoaded && (error || localError) && (
         <p style={{ color: '#ff6b6b', marginTop: '12px', fontSize: '0.875rem' }}>
           API Error: {localError ?? error}
         </p>
       )}
 
-      {stickers.length === 0 ? (
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          style={{
-            marginTop: '40px',
-            padding: '56px 24px',
-            borderRadius: '12px',
-            border: '2px dashed #333',
-            backgroundColor: '#181818',
-            textAlign: 'center',
-            cursor: 'pointer',
-          }}
-        >
-          <p style={{ margin: '0 0 8px 0', fontSize: '1rem', color: '#e5e7eb', fontWeight: 500 }}>
-            Drag & drop a PNG, JPG, or WEBP here to create a sticker
-          </p>
-          <p style={{ margin: 0, fontSize: '0.85rem', color: '#888' }}>
-            or click &ldquo;+ Import / New Sticker&rdquo; above (max 20 MB)
-          </p>
-        </div>
-      ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-            gap: '16px',
-          }}
-        >
-          {stickers.map((sticker) => {
-            const isConfirming = confirmDeleteId === sticker.id;
+      {/* VIEW 1: MY STICKERS */}
+      {activeTab === 'stickers' && (
+        <>
+          {stickers.length === 0 ? (
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                marginTop: '40px',
+                padding: '56px 24px',
+                borderRadius: '12px',
+                border: '2px dashed #333',
+                backgroundColor: '#181818',
+                textAlign: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              <p style={{ margin: '0 0 8px 0', fontSize: '1rem', color: '#e5e7eb', fontWeight: 500 }}>
+                Drag & drop a PNG, JPG, or WEBP here to create a sticker
+              </p>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: '#888' }}>
+                or click &ldquo;+ Import / New Sticker&rdquo; above (max 20 MB)
+              </p>
+            </div>
+          ) : (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: '16px',
+              }}
+            >
+              {stickers.map((sticker) => {
+                const isConfirming = confirmDeleteId === sticker.id;
 
-            return (
-              <div
-                key={sticker.id}
-                style={{
-                  backgroundColor: '#1c1c1c',
-                  border: '1px solid #2e2e2e',
-                  borderRadius: '10px',
-                  padding: '12px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '10px',
-                }}
-              >
-                <div
-                  style={{
-                    width: '100%',
-                    height: '150px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: '6px',
-                    backgroundImage:
-                      'linear-gradient(45deg, #252525 25%, transparent 25%), linear-gradient(-45deg, #252525 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #252525 75%), linear-gradient(-45deg, transparent 75%, #252525 75%)',
-                    backgroundSize: '16px 16px',
-                    backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
-                    backgroundColor: '#181818',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <img
-                    src={`${serverBaseUrl}/files/stickers/${sticker.thumb_path}`}
-                    alt={sticker.name}
-                    style={{
-                      maxWidth: '90%',
-                      maxHeight: '90%',
-                      objectFit: 'contain',
-                    }}
-                  />
-                </div>
-
-                <div style={{ width: '100%', textAlign: 'left' }}>
+                return (
                   <div
+                    key={sticker.id}
                     style={{
-                      fontSize: '0.9rem',
-                      fontWeight: 600,
-                      color: '#f3f4f6',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
+                      backgroundColor: '#1c1c1c',
+                      border: '1px solid #2e2e2e',
+                      borderRadius: '10px',
+                      padding: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '10px',
                     }}
                   >
-                    {sticker.name}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '2px' }}>
-                    {sticker.width} × {sticker.height} px
-                  </div>
-                </div>
+                    <div
+                      style={{
+                        width: '100%',
+                        height: '150px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '6px',
+                        backgroundImage:
+                          'linear-gradient(45deg, #252525 25%, transparent 25%), linear-gradient(-45deg, #252525 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #252525 75%), linear-gradient(-45deg, transparent 75%, #252525 75%)',
+                        backgroundSize: '16px 16px',
+                        backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+                        backgroundColor: '#181818',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <img
+                        src={`${serverBaseUrl}/files/stickers/${sticker.thumb_path}`}
+                        alt={sticker.name}
+                        style={{
+                          maxWidth: '90%',
+                          maxHeight: '90%',
+                          objectFit: 'contain',
+                        }}
+                      />
+                    </div>
 
-                <div
+                    <div style={{ width: '100%', textAlign: 'left' }}>
+                      <div
+                        style={{
+                          fontSize: '0.9rem',
+                          fontWeight: 600,
+                          color: '#f3f4f6',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {sticker.name}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '2px' }}>
+                        {sticker.width} × {sticker.height} px
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        width: '100%',
+                        gap: '6px',
+                        marginTop: 'auto',
+                      }}
+                    >
+                      {!isConfirming ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void handlePinSticker(sticker.id)}
+                            style={{
+                              flex: 1,
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              border: 'none',
+                              backgroundColor: '#10b981',
+                              color: '#fff',
+                              fontWeight: 600,
+                              fontSize: '0.8rem',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Pin to Desktop
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(sticker.id)}
+                            style={{
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              border: '1px solid #4b2323',
+                              backgroundColor: '#2a1818',
+                              color: '#fca5a5',
+                              fontWeight: 600,
+                              fontSize: '0.8rem',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void deleteSticker(sticker.id)}
+                            style={{
+                              flex: 1,
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              border: 'none',
+                              backgroundColor: '#ef4444',
+                              color: '#fff',
+                              fontWeight: 700,
+                              fontSize: '0.8rem',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Confirm Delete?
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            title="Cancel Delete"
+                            style={{
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              border: '1px solid #444',
+                              backgroundColor: '#2a2a2a',
+                              color: '#ddd',
+                              fontWeight: 600,
+                              fontSize: '0.8rem',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* VIEW 2: POKÉMON HOLO VAULT (91 CARDS) */}
+      {activeTab === 'pokemon' && (
+        <section>
+          {/* Search & Category Filter Toolbar */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              marginBottom: '24px',
+              backgroundColor: '#191919',
+              padding: '16px',
+              borderRadius: '10px',
+              border: '1px solid #2d2d2d',
+            }}
+          >
+            <input
+              type="text"
+              value={pokemonSearch}
+              onChange={(e) => setPokemonSearch(e.target.value)}
+              placeholder="🔍 Search 91 Pokémon cards (e.g. Pikachu, Charizard, Mewtwo, Rayquaza, Gengar)..."
+              style={{
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                border: '1px solid #3d3d3d',
+                backgroundColor: '#121212',
+                color: '#fff',
+                fontSize: '0.88rem',
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {[
+                { id: 'all', label: `All (${pokemonCardsList.length})` },
+                { id: 'secret', label: 'Secret Rare & Rainbow' },
+                { id: 'vmax', label: 'VMAX / VSTAR' },
+                { id: 'radiant', label: 'Radiant' },
+                { id: 'trainer', label: 'Trainer Gallery' },
+                { id: 'amazing', label: 'Amazing Rare' },
+              ].map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setPokemonFilter(f.id)}
                   style={{
-                    display: 'flex',
-                    width: '100%',
-                    gap: '6px',
-                    marginTop: 'auto',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid',
+                    borderColor: pokemonFilter === f.id ? '#ec4899' : '#333',
+                    backgroundColor: pokemonFilter === f.id ? '#831843' : '#222',
+                    color: pokemonFilter === f.id ? '#fff' : '#ccc',
+                    fontWeight: 600,
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
                   }}
                 >
-                  {!isConfirming ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void handlePinSticker(sticker.id)}
-                        style={{
-                          flex: 1,
-                          padding: '8px 10px',
-                          borderRadius: '6px',
-                          border: 'none',
-                          backgroundColor: '#10b981',
-                          color: '#fff',
-                          fontWeight: 600,
-                          fontSize: '0.8rem',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Pin to Desktop
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteId(sticker.id)}
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: '6px',
-                          border: '1px solid #4b2323',
-                          backgroundColor: '#2a1818',
-                          color: '#fca5a5',
-                          fontWeight: 600,
-                          fontSize: '0.8rem',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void deleteSticker(sticker.id)}
-                        style={{
-                          flex: 1,
-                          padding: '8px 10px',
-                          borderRadius: '6px',
-                          border: 'none',
-                          backgroundColor: '#ef4444',
-                          color: '#fff',
-                          fontWeight: 700,
-                          fontSize: '0.8rem',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Confirm Delete?
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteId(null)}
-                        title="Cancel Delete"
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: '6px',
-                          border: '1px solid #444',
-                          backgroundColor: '#2a2a2a',
-                          color: '#ddd',
-                          fontWeight: 600,
-                          fontSize: '0.8rem',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        ✕
-                      </button>
-                    </>
-                  )}
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <p style={{ color: '#888', fontSize: '0.82rem', marginBottom: '16px' }}>
+            Showing {filteredPokemon.length} holographic cards. Hover over any card to view its live
+            3D holographic tilt and prism glare!
+          </p>
+
+          {/* Cards Grid */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: '24px',
+            }}
+          >
+            {filteredPokemon.map((card) => {
+              const isPinning = pinningCardId === card.id;
+
+              return (
+                <div
+                  key={card.id}
+                  style={{
+                    backgroundColor: '#1c1c1c',
+                    border: '1px solid #2e2e2e',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  <PokemonCard card={card} interactive={true} scale={0.88} />
+
+                  <div style={{ width: '100%', textAlign: 'center' }}>
+                    <div
+                      style={{
+                        fontSize: '0.95rem',
+                        fontWeight: 600,
+                        color: '#f3f4f6',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {card.name}
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: '#9ca3af', marginTop: '2px' }}>
+                      {card.rarity || 'Holo Rare'} · #{card.number}
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={isPinning}
+                      onClick={() => void handlePinPokemonCard(card)}
+                      style={{
+                        marginTop: '10px',
+                        width: '100%',
+                        padding: '8px 12px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        backgroundColor: isPinning ? '#374151' : '#10b981',
+                        color: '#fff',
+                        fontWeight: 600,
+                        fontSize: '0.82rem',
+                        cursor: isPinning ? 'wait' : 'pointer',
+                        transition: 'background-color 0.2s',
+                      }}
+                    >
+                      {isPinning ? 'Pinning to Desktop...' : '📌 Pin to Desktop (3D Holo)'}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </section>
       )}
     </main>
   );

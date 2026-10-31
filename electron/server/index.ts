@@ -1,5 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
 import { AddressInfo } from 'net';
 import { Server } from 'http';
 import { stickersRouter } from './routes/stickers';
@@ -25,6 +27,15 @@ export function startLocalServer(token: string): Promise<ServerInstance> {
 
     // Serve saved sticker PNGs and thumbnails locally
     app.use('/files/stickers', express.static(getStickersDir()));
+
+    // Serve bundled pokemon cards and foil textures locally
+    const publicImgDir = path.resolve(__dirname, '../../public/img');
+    const distImgDir = path.resolve(__dirname, '../dist/img');
+    if (fs.existsSync(publicImgDir)) {
+      app.use('/img', express.static(publicImgDir));
+    } else if (fs.existsSync(distImgDir)) {
+      app.use('/img', express.static(distImgDir));
+    }
 
     app.use((req: Request, res: Response, next: NextFunction) => {
       const providedToken = req.header('x-stickerdesk-token');
