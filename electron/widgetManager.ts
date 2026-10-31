@@ -70,6 +70,7 @@ const MAX_WIDGET_SIZE = 1200;
 export class WidgetManager {
   private readonly windows: Map<string, BrowserWindow> = new Map();
   private readonly aspectRatios: Map<string, number> = new Map();
+  private readonly sizes: Map<string, { width: number; height: number }> = new Map();
   private readonly saveTimers: Map<string, NodeJS.Timeout> = new Map();
   private lastContextMenuShownAt = 0;
 
@@ -248,12 +249,12 @@ export class WidgetManager {
     const widgetId = crypto.randomUUID();
     const defaultSettings: WidgetSettings = { animation: 'none' };
 
-    // Widgets float above other applications by default (toggleable per widget).
+    // Widgets stay on desktop by default (toggleable per widget via context menu).
     db.prepare(
       `INSERT INTO widgets (
         id, sticker_id, mode, x, y, width, height, monitor_id,
         opacity, locked, click_through, always_on_top, settings_json, active
-      ) VALUES (?, ?, '2d', ?, ?, ?, ?, ?, 1.0, 0, 0, 1, ?, 1)`
+      ) VALUES (?, ?, '2d', ?, ?, ?, ?, ?, 1.0, 0, 0, 0, ?, 1)`
     ).run(
       widgetId,
       stickerId,
@@ -344,9 +345,11 @@ export class WidgetManager {
       }
       this.windows.delete(widgetId);
       this.aspectRatios.delete(widgetId);
+      this.sizes.delete(widgetId);
     });
 
     this.windows.set(widgetId, win);
+    this.sizes.set(widgetId, { width: payload.width, height: payload.height });
   }
 
   public restoreActiveWidgets(): void {
@@ -387,19 +390,28 @@ export class WidgetManager {
     if (!win || win.isDestroyed()) return;
 
     const [currX, currY] = win.getPosition();
-    const [currW, currH] = win.getContentSize();
+    const size = this.sizes.get(widgetId) ?? (() => {
+      const [w, h] = win.getContentSize();
+      return { width: w, height: h };
+    })();
 
-    // Move-only path: never touch window width/height to prevent fractional DPI auto-zoom
+    // Move-only path: passing explicit size in setBounds prevents Windows fractional DPI drift
     if (nextBounds.width === undefined) {
       const targetX = nextBounds.x !== undefined ? Math.round(nextBounds.x) : currX;
       const targetY = nextBounds.y !== undefined ? Math.round(nextBounds.y) : currY;
-      win.setPosition(targetX, targetY);
-      this.schedulePersistBounds(widgetId, targetX, targetY, currW, currH);
+      win.setBounds({
+        x: targetX,
+        y: targetY,
+        width: size.width,
+        height: size.height,
+      });
+
+      this.schedulePersistBounds(widgetId, targetX, targetY, size.width, size.height);
       return;
     }
 
     // Resize path
-    const aspect = this.aspectRatios.get(widgetId) ?? currW / Math.max(1, currH);
+    const aspect = this.aspectRatios.get(widgetId) ?? size.width / Math.max(1, size.height);
     const targetWidth = Math.max(
       MIN_WIDGET_SIZE,
       Math.min(MAX_WIDGET_SIZE, Math.round(nextBounds.width))
@@ -408,10 +420,13 @@ export class WidgetManager {
     const targetX = nextBounds.x !== undefined ? Math.round(nextBounds.x) : currX;
     const targetY = nextBounds.y !== undefined ? Math.round(nextBounds.y) : currY;
 
-    win.setContentSize(targetWidth, targetHeight);
-    if (nextBounds.x !== undefined || nextBounds.y !== undefined) {
-      win.setPosition(targetX, targetY);
-    }
+    this.sizes.set(widgetId, { width: targetWidth, height: targetHeight });
+    win.setBounds({
+      x: targetX,
+      y: targetY,
+      width: targetWidth,
+      height: targetHeight,
+    });
 
     this.schedulePersistBounds(widgetId, targetX, targetY, targetWidth, targetHeight);
   }
@@ -534,6 +549,7 @@ export class WidgetManager {
     }
     this.windows.delete(widgetId);
     this.aspectRatios.delete(widgetId);
+    this.sizes.delete(widgetId);
   }
 
   public showContextMenu(widgetId: string): void {
