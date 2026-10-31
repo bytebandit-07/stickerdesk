@@ -3,5 +3,6 @@ dist/
 dist-electron/
 data/
 *.log
+*.tsbuildinfo
 .DS_Store
 Thumbs.db

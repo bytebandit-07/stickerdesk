@@ -44,7 +44,7 @@ export function initDb(userDataPath: string): Database.Database {
       opacity REAL NOT NULL DEFAULT 1.0,
       locked INTEGER NOT NULL DEFAULT 0,
       click_through INTEGER NOT NULL DEFAULT 0,
-      always_on_top INTEGER NOT NULL DEFAULT 0,
+      always_on_top INTEGER NOT NULL DEFAULT 1,
       settings_json TEXT NOT NULL DEFAULT '{}',
       active INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (sticker_id) REFERENCES stickers(id) ON DELETE CASCADE
@@ -56,15 +56,16 @@ export function initDb(userDataPath: string): Database.Database {
     );
   `);
 
-  // One-time migration to reset existing widgets to desktop Z-order (always_on_top = 0)
+  // One-time migration: widgets should float above other applications by default.
+  // Users can still turn "Always on Top" off per widget from its context menu.
   const migrationCheck = db
-    .prepare("SELECT value FROM settings WHERE key = 'desktop_z_order_migrated_v1'")
+    .prepare("SELECT value FROM settings WHERE key = 'widgets_always_on_top_v2'")
     .get() as { value: string } | undefined;
 
   if (!migrationCheck) {
-    db.exec('UPDATE widgets SET always_on_top = 0 WHERE always_on_top = 1;');
+    db.exec('UPDATE widgets SET always_on_top = 1 WHERE active = 1;');
     db.prepare(
-      "INSERT OR REPLACE INTO settings (key, value) VALUES ('desktop_z_order_migrated_v1', 'true')"
+      "INSERT OR REPLACE INTO settings (key, value) VALUES ('widgets_always_on_top_v2', 'true')"
     ).run();
   }
 

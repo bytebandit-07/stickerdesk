@@ -44,6 +44,21 @@ export const Widget2D: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // React attaches wheel listeners passively, so preventDefault there is ignored.
+    // Register a native non-passive listener to stop Chromium's Ctrl+wheel page
+    // zoom (which scales the sticker independently of the window size).
+    const preventPageZoom = (e: WheelEvent): void => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('wheel', preventPageZoom, { passive: false });
+    return () => {
+      window.removeEventListener('wheel', preventPageZoom);
+    };
+  }, []);
+
+  useEffect(() => {
     const handleWindowMouseMove = (e: MouseEvent): void => {
       const session = dragSessionRef.current;
       if (!session || !widgetState || widgetState.locked || widgetState.clickThrough) {

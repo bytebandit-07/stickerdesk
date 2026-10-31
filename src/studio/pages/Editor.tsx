@@ -17,6 +17,8 @@ import {
 
   applyBrushSegment,
 
+  applyLassoMask,
+
   PixelCrop,
 
   Point2D,
@@ -447,7 +449,7 @@ export const Editor: React.FC = () => {
 
 
 
-  const handleApplyLasso = (lassoWorking: ImageData): void => {
+  const handleApplyLasso = (lassoWorking: ImageData, path: Point2D[]): void => {
 
     if (!currentEntry) return;
 
@@ -459,7 +461,11 @@ export const Editor: React.FC = () => {
 
       referenceOriginal: cloneImageData(lassoWorking),
 
-      preBgRemoval: currentEntry.preBgRemoval ? cloneImageData(lassoWorking) : null,
+      // Keep the "Before" image in sync with the same lasso path. Reusing the
+      // post-removal image here would make the Before/After toggle misleading.
+      preBgRemoval: currentEntry.preBgRemoval
+        ? applyLassoMask(currentEntry.preBgRemoval, path)
+        : null,
 
     });
 

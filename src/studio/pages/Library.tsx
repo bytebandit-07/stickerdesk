@@ -194,8 +194,15 @@ export const Library: React.FC = () => {
   };
 
   const handleDisableAllClickThrough = async (): Promise<void> => {
-    await disableAllClickThrough();
-    await fetchActiveWidgets();
+    setLocalError(null);
+    try {
+      await disableAllClickThrough();
+      await fetchActiveWidgets();
+    } catch (err: unknown) {
+      setLocalError(
+        err instanceof Error ? err.message : 'Failed to disable click-through on widgets'
+      );
+    }
   };
 
   return (

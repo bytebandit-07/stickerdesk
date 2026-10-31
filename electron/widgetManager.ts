@@ -71,6 +71,28 @@ export class WidgetManager {
   private readonly windows: Map<string, BrowserWindow> = new Map();
   private readonly aspectRatios: Map<string, number> = new Map();
   private readonly saveTimers: Map<string, NodeJS.Timeout> = new Map();
+  private lastContextMenuShownAt = 0;
+
+  /**
+   * Disables Chromium's own pinch / Ctrl+wheel page zoom for widget windows.
+   * Those zoom changes scaled the sticker even when no window resize happened,
+   * which looked like the sticker was auto-zooming on its own.
+   */
+  private disablePageZoom(win: BrowserWindow): void {
+    const lockZoom = (): void => {
+      win.webContents.setZoomFactor(1);
+      void win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {
+        // Older Electron versions may not support visual zoom limits.
+      });
+    };
+
+    lockZoom();
+    win.webContents.on('did-finish-load', lockZoom);
+    win.webContents.on('zoom-changed', (event) => {
+      event.preventDefault();
+      win.webContents.setZoomFactor(1);
+    });
+  }
 
   private applyClickThroughState(win: BrowserWindow, enabled: boolean): void {
     if (enabled) {
@@ -226,12 +248,12 @@ export class WidgetManager {
     const widgetId = crypto.randomUUID();
     const defaultSettings: WidgetSettings = { animation: 'none' };
 
-    // Default always_on_top to 0 so widgets sit on the desktop behind active applications
+    // Widgets float above other applications by default (toggleable per widget).
     db.prepare(
       `INSERT INTO widgets (
         id, sticker_id, mode, x, y, width, height, monitor_id,
         opacity, locked, click_through, always_on_top, settings_json, active
-      ) VALUES (?, ?, '2d', ?, ?, ?, ?, ?, 1.0, 0, 0, 0, ?, 1)`
+      ) VALUES (?, ?, '2d', ?, ?, ?, ?, ?, 1.0, 0, 0, 1, ?, 1)`
     ).run(
       widgetId,
       stickerId,
@@ -299,6 +321,7 @@ export class WidgetManager {
 
     this.applyAlwaysOnTopState(win, payload.alwaysOnTop);
     this.applyClickThroughState(win, payload.clickThrough);
+    this.disablePageZoom(win);
 
     win.webContents.on('context-menu', () => {
       this.showContextMenu(widgetId);
@@ -517,6 +540,12 @@ export class WidgetManager {
     const win = this.windows.get(widgetId);
     const payload = this.getWidgetPayload(widgetId);
     if (!win || win.isDestroyed() || !payload) return;
+
+    // Both the renderer IPC path and webContents' context-menu event can fire for
+    // the same right-click. Ignore the duplicate so two menus never stack up.
+    const now = Date.now();
+    if (now - this.lastContextMenuShownAt < 250) return;
+    this.lastContextMenuShownAt = now;
 
     const opacityLevels = [
       { label: '100%', value: 1.0 },

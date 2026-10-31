@@ -3,8 +3,24 @@ import { Point2D, applyLassoMask } from '../../lib/image/mask';
 
 interface LassoToolProps {
   sourceImageData: ImageData;
-  onApplyLasso: (newImageData: ImageData) => void;
+  onApplyLasso: (newImageData: ImageData, path: Point2D[]) => void;
   onCancel: () => void;
+}
+
+// Freehand drawing produces hundreds of points. Keep the boundary editable by
+// thinning it down to a manageable number of draggable vertices.
+const MAX_EDITABLE_VERTICES = 32;
+
+function simplifyPoints(input: Point2D[]): Point2D[] {
+  if (input.length <= MAX_EDITABLE_VERTICES) return input;
+
+  const step = input.length / MAX_EDITABLE_VERTICES;
+  const result: Point2D[] = [];
+  for (let i = 0; i < MAX_EDITABLE_VERTICES; i++) {
+    result.push(input[Math.min(input.length - 1, Math.round(i * step))]);
+  }
+  result[result.length - 1] = input[input.length - 1];
+  return result;
 }
 
 export const LassoTool: React.FC<LassoToolProps> = ({
@@ -13,6 +29,7 @@ export const LassoTool: React.FC<LassoToolProps> = ({
   onCancel,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const draggingPointRef = useRef<number | null>(null);
   const [points, setPoints] = useState<Point2D[]>([]);
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
 
@@ -45,6 +62,23 @@ export const LassoTool: React.FC<LassoToolProps> = ({
         ctx.strokeStyle = '#4f46e5';
         ctx.stroke();
         ctx.restore();
+
+        // Editable boundary: show draggable vertices once the loop is closed.
+        if (!isDrawing) {
+          const handleRadius = Math.max(4, Math.round(sourceImageData.width / 140));
+          ctx.save();
+          ctx.setLineDash([]);
+          for (const pt of currentPoints) {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, handleRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#4f46e5';
+            ctx.fill();
+            ctx.lineWidth = Math.max(1, handleRadius / 3);
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
       }
     },
     [sourceImageData, isDrawing]
@@ -66,26 +100,66 @@ export const LassoTool: React.FC<LassoToolProps> = ({
     };
   };
 
+  const findPointNear = (pt: Point2D): number => {
+    const canvas = canvasRef.current;
+    if (!canvas) return -1;
+    const rect = canvas.getBoundingClientRect();
+    const scale = canvas.width / Math.max(1, rect.width);
+    const hitRadius = 10 * scale;
+    for (let i = points.length - 1; i >= 0; i--) {
+      if (Math.hypot(points[i].x - pt.x, points[i].y - pt.y) <= hitRadius) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>): void => {
+    if (e.button !== 0) return;
     const pt = toCanvasCoords(e);
+
+    // Grab an existing vertex to adjust the boundary instead of starting a new loop.
+    if (!isDrawing && points.length > 2) {
+      const pointIndex = findPointNear(pt);
+      if (pointIndex !== -1) {
+        draggingPointRef.current = pointIndex;
+        return;
+      }
+    }
+
+    draggingPointRef.current = null;
     setIsDrawing(true);
     setPoints([pt]);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>): void => {
+    if (draggingPointRef.current !== null) {
+      const pt = toCanvasCoords(e);
+      const index = draggingPointRef.current;
+      setPoints((prev) => prev.map((point, i) => (i === index ? pt : point)));
+      return;
+    }
+
     if (!isDrawing) return;
     const pt = toCanvasCoords(e);
     setPoints((prev) => [...prev, pt]);
   };
 
   const handleMouseUp = (): void => {
+    if (draggingPointRef.current !== null) {
+      draggingPointRef.current = null;
+      return;
+    }
+    if (isDrawing) {
+      setPoints((prev) => (prev.length > 2 ? simplifyPoints(prev) : prev));
+    }
     setIsDrawing(false);
   };
 
   const handleConfirm = (): void => {
     if (points.length < 3) return;
     const result = applyLassoMask(sourceImageData, points);
-    onApplyLasso(result);
+    onApplyLasso(result, points);
   };
 
   return (
@@ -130,7 +204,8 @@ export const LassoTool: React.FC<LassoToolProps> = ({
         }}
       >
         <span style={{ fontSize: '0.85rem', color: '#bbb' }}>
-          Draw a freehand loop around the area to keep. Everything outside becomes transparent.
+          Draw a freehand loop around the area to keep, then drag the dots to fine-tune the
+          boundary. Everything outside becomes transparent.
         </span>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
