@@ -13,6 +13,11 @@ export interface WidgetBoundsInput {
   width?: number;
 }
 
+export interface ScreenPoint {
+  x: number;
+  y: number;
+}
+
 export interface StickerDeskAPI {
   getServerConfig: () => Promise<ServerConfig>;
   pinSticker: (stickerId: string) => Promise<WidgetStatePayload>;
@@ -20,6 +25,7 @@ export interface StickerDeskAPI {
   setWidgetBounds: (widgetId: string, bounds: WidgetBoundsInput) => void;
   showWidgetContextMenu: (widgetId: string) => void;
   setAllClickThrough: (enabled: boolean) => Promise<void>;
+  getCursorScreenPoint: () => Promise<ScreenPoint>;
   onWidgetStateUpdated: (callback: (state: WidgetStatePayload) => void) => () => void;
 }
 
@@ -37,6 +43,8 @@ const api: StickerDeskAPI = {
   },
   setAllClickThrough: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('widget:set-all-click-through', enabled),
+  getCursorScreenPoint: (): Promise<ScreenPoint> =>
+    ipcRenderer.invoke('screen:get-cursor'),
   onWidgetStateUpdated: (callback: (state: WidgetStatePayload) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: WidgetStatePayload) => {
       callback(state);

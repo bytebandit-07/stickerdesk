@@ -21,7 +21,10 @@ export const WidgetPatchSchema = z.object({
   always_on_top: z.boolean().optional(),
   settings: z
     .object({
-      animation: z.enum(['none', 'float', 'sway']).optional(),
+      animation: z.enum(['none', 'float', 'spin', 'sway']).optional(),
+      theme: z.enum(['vinyl', 'holographic', 'epoxy', 'enamel']).optional(),
+      tiltMode: z.enum(['none', 'subtle', 'dynamic']).optional(),
+      shadowEnabled: z.boolean().optional(),
     })
     .optional(),
   active: z.boolean().optional(),

@@ -3,10 +3,15 @@ import path from 'path';
 import crypto from 'crypto';
 import { getDb } from './server/db';
 
-export type IdleAnimation = 'none' | 'float' | 'sway';
+export type IdleAnimation = 'none' | 'float' | 'spin' | 'sway';
+export type Sticker3DTheme = 'vinyl' | 'holographic' | 'epoxy' | 'enamel';
+export type TiltMode = 'none' | 'subtle' | 'dynamic';
 
 export interface WidgetSettings {
   animation: IdleAnimation;
+  theme: Sticker3DTheme;
+  tiltMode: TiltMode;
+  shadowEnabled: boolean;
 }
 
 export interface WidgetRow {
@@ -72,26 +77,23 @@ export class WidgetManager {
   private readonly aspectRatios: Map<string, number> = new Map();
   private readonly sizes: Map<string, { width: number; height: number }> = new Map();
   private readonly saveTimers: Map<string, NodeJS.Timeout> = new Map();
-  private lastContextMenuShownAt = 0;
 
-  /**
-   * Disables Chromium's own pinch / Ctrl+wheel page zoom for widget windows.
-   * Those zoom changes scaled the sticker even when no window resize happened,
-   * which looked like the sticker was auto-zooming on its own.
-   */
   private disablePageZoom(win: BrowserWindow): void {
-    const lockZoom = (): void => {
+    win.webContents.on('did-finish-load', () => {
+      if (win.isDestroyed()) return;
       win.webContents.setZoomFactor(1);
-      void win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {
-        // Older Electron versions may not support visual zoom limits.
-      });
-    };
-
-    lockZoom();
-    win.webContents.on('did-finish-load', lockZoom);
-    win.webContents.on('zoom-changed', (event) => {
-      event.preventDefault();
-      win.webContents.setZoomFactor(1);
+      void win.webContents.setVisualZoomLevelLimits(1, 1);
+    });
+    win.webContents.on('before-input-event', (event, input) => {
+      if (
+        input.control &&
+        (input.key === '+' ||
+          input.key === '-' ||
+          input.key === '=' ||
+          input.key === '0')
+      ) {
+        event.preventDefault();
+      }
     });
   }
 
@@ -137,16 +139,44 @@ export class WidgetManager {
   }
 
   private parseSettings(jsonStr: string): WidgetSettings {
+    const defaults: WidgetSettings = {
+      animation: 'none',
+      theme: 'vinyl',
+      tiltMode: 'subtle',
+      shadowEnabled: true,
+    };
+
     try {
       const parsed = JSON.parse(jsonStr) as Partial<WidgetSettings>;
-      const anim = parsed.animation;
-      if (anim === 'float' || anim === 'sway' || anim === 'none') {
-        return { animation: anim };
-      }
+      return {
+        animation:
+          parsed.animation === 'float' ||
+          parsed.animation === 'spin' ||
+          parsed.animation === 'sway' ||
+          parsed.animation === 'none'
+            ? parsed.animation
+            : defaults.animation,
+        theme:
+          parsed.theme === 'vinyl' ||
+          parsed.theme === 'holographic' ||
+          parsed.theme === 'epoxy' ||
+          parsed.theme === 'enamel'
+            ? parsed.theme
+            : defaults.theme,
+        tiltMode:
+          parsed.tiltMode === 'none' ||
+          parsed.tiltMode === 'subtle' ||
+          parsed.tiltMode === 'dynamic'
+            ? parsed.tiltMode
+            : defaults.tiltMode,
+        shadowEnabled:
+          typeof parsed.shadowEnabled === 'boolean'
+            ? parsed.shadowEnabled
+            : defaults.shadowEnabled,
+      };
     } catch {
-      // Fallback to default settings
+      return defaults;
     }
-    return { animation: 'none' };
   }
 
   private clampToVisibleDisplays(
@@ -203,6 +233,9 @@ export class WidgetManager {
 
     const aspectRatio = sticker.width / Math.max(1, sticker.height);
     this.aspectRatios.set(widgetId, aspectRatio);
+    if (!this.sizes.has(widgetId)) {
+      this.sizes.set(widgetId, { width: row.width, height: row.height });
+    }
 
     return {
       id: row.id,
@@ -247,9 +280,13 @@ export class WidgetManager {
 
     const { x, y, monitorId } = this.clampToVisibleDisplays(rawX, rawY, initWidth, initHeight);
     const widgetId = crypto.randomUUID();
-    const defaultSettings: WidgetSettings = { animation: 'none' };
+    const defaultSettings: WidgetSettings = {
+      animation: 'none',
+      theme: 'vinyl',
+      tiltMode: 'subtle',
+      shadowEnabled: true,
+    };
 
-    // Widgets stay on desktop by default (toggleable per widget via context menu).
     db.prepare(
       `INSERT INTO widgets (
         id, sticker_id, mode, x, y, width, height, monitor_id,
@@ -266,6 +303,7 @@ export class WidgetManager {
       JSON.stringify(defaultSettings)
     );
 
+    this.sizes.set(widgetId, { width: initWidth, height: initHeight });
     this.createWidget(widgetId);
     const payload = this.getWidgetPayload(widgetId);
     if (!payload) {
@@ -298,6 +336,8 @@ export class WidgetManager {
       payload.y = clamped.y;
     }
 
+    this.sizes.set(widgetId, { width: payload.width, height: payload.height });
+
     const win = new BrowserWindow({
       x: payload.x,
       y: payload.y,
@@ -320,13 +360,9 @@ export class WidgetManager {
       },
     });
 
+    this.disablePageZoom(win);
     this.applyAlwaysOnTopState(win, payload.alwaysOnTop);
     this.applyClickThroughState(win, payload.clickThrough);
-    this.disablePageZoom(win);
-
-    win.webContents.on('context-menu', () => {
-      this.showContextMenu(widgetId);
-    });
 
     const query = `?widgetId=${encodeURIComponent(widgetId)}`;
     if (process.env.NODE_ENV === 'development') {
@@ -349,7 +385,6 @@ export class WidgetManager {
     });
 
     this.windows.set(widgetId, win);
-    this.sizes.set(widgetId, { width: payload.width, height: payload.height });
   }
 
   public restoreActiveWidgets(): void {
@@ -367,14 +402,23 @@ export class WidgetManager {
     for (const [widgetId, win] of this.windows.entries()) {
       if (win.isDestroyed()) continue;
       const bounds = win.getBounds();
+      const cachedSize = this.sizes.get(widgetId) ?? {
+        width: bounds.width,
+        height: bounds.height,
+      };
       const clamped = this.clampToVisibleDisplays(
         bounds.x,
         bounds.y,
-        bounds.width,
-        bounds.height
+        cachedSize.width,
+        cachedSize.height
       );
       if (clamped.x !== bounds.x || clamped.y !== bounds.y) {
-        win.setPosition(clamped.x, clamped.y);
+        win.setBounds({
+          x: clamped.x,
+          y: clamped.y,
+          width: cachedSize.width,
+          height: cachedSize.height,
+        });
         getDb()
           .prepare('UPDATE widgets SET x = ?, y = ?, monitor_id = ? WHERE id = ?')
           .run(clamped.x, clamped.y, clamped.monitorId, widgetId);
@@ -382,6 +426,10 @@ export class WidgetManager {
     }
   }
 
+  /**
+   * Always uses atomic `win.setBounds({ x, y, width, height })` with cached `this.sizes`
+   * on move to prevent Windows fractional DPI auto-zoom drift.
+   */
   public setWidgetBounds(
     widgetId: string,
     nextBounds: { x?: number; y?: number; width?: number }
@@ -389,38 +437,50 @@ export class WidgetManager {
     const win = this.windows.get(widgetId);
     if (!win || win.isDestroyed()) return;
 
-    const [currX, currY] = win.getPosition();
-    const size = this.sizes.get(widgetId) ?? (() => {
-      const [w, h] = win.getContentSize();
-      return { width: w, height: h };
-    })();
+    const currentBounds = win.getBounds();
+    const cachedSize = this.sizes.get(widgetId) ?? {
+      width: currentBounds.width,
+      height: currentBounds.height,
+    };
 
-    // Move-only path: passing explicit size in setBounds prevents Windows fractional DPI drift
     if (nextBounds.width === undefined) {
-      const targetX = nextBounds.x !== undefined ? Math.round(nextBounds.x) : currX;
-      const targetY = nextBounds.y !== undefined ? Math.round(nextBounds.y) : currY;
+      const targetX =
+        nextBounds.x !== undefined ? Math.round(nextBounds.x) : currentBounds.x;
+      const targetY =
+        nextBounds.y !== undefined ? Math.round(nextBounds.y) : currentBounds.y;
+
       win.setBounds({
         x: targetX,
         y: targetY,
-        width: size.width,
-        height: size.height,
+        width: cachedSize.width,
+        height: cachedSize.height,
       });
 
-      this.schedulePersistBounds(widgetId, targetX, targetY, size.width, size.height);
+      this.schedulePersistBounds(
+        widgetId,
+        targetX,
+        targetY,
+        cachedSize.width,
+        cachedSize.height
+      );
       return;
     }
 
-    // Resize path
-    const aspect = this.aspectRatios.get(widgetId) ?? size.width / Math.max(1, size.height);
+    const aspect =
+      this.aspectRatios.get(widgetId) ??
+      cachedSize.width / Math.max(1, cachedSize.height);
     const targetWidth = Math.max(
       MIN_WIDGET_SIZE,
       Math.min(MAX_WIDGET_SIZE, Math.round(nextBounds.width))
     );
     const targetHeight = Math.max(MIN_WIDGET_SIZE, Math.round(targetWidth / aspect));
-    const targetX = nextBounds.x !== undefined ? Math.round(nextBounds.x) : currX;
-    const targetY = nextBounds.y !== undefined ? Math.round(nextBounds.y) : currY;
+    const targetX =
+      nextBounds.x !== undefined ? Math.round(nextBounds.x) : currentBounds.x;
+    const targetY =
+      nextBounds.y !== undefined ? Math.round(nextBounds.y) : currentBounds.y;
 
     this.sizes.set(widgetId, { width: targetWidth, height: targetHeight });
+
     win.setBounds({
       x: targetX,
       y: targetY,
@@ -499,6 +559,7 @@ export class WidgetManager {
         win.close();
       }
       this.windows.delete(widgetId);
+      this.sizes.delete(widgetId);
       return updatedPayload;
     }
 
@@ -531,6 +592,14 @@ export class WidgetManager {
     }
   }
 
+  public toggleAllClickThrough(): void {
+    const db = getDb();
+    const anyEnabled = db
+      .prepare('SELECT COUNT(*) as cnt FROM widgets WHERE active = 1 AND click_through = 1')
+      .get() as { cnt: number };
+    this.setAllClickThrough(anyEnabled.cnt === 0);
+  }
+
   public removeWidget(widgetId: string): void {
     const db = getDb();
     db.prepare('DELETE FROM widgets WHERE id = ?').run(widgetId);
@@ -557,12 +626,6 @@ export class WidgetManager {
     const payload = this.getWidgetPayload(widgetId);
     if (!win || win.isDestroyed() || !payload) return;
 
-    // Both the renderer IPC path and webContents' context-menu event can fire for
-    // the same right-click. Ignore the duplicate so two menus never stack up.
-    const now = Date.now();
-    if (now - this.lastContextMenuShownAt < 250) return;
-    this.lastContextMenuShownAt = now;
-
     const opacityLevels = [
       { label: '100%', value: 1.0 },
       { label: '85%', value: 0.85 },
@@ -571,24 +634,80 @@ export class WidgetManager {
       { label: '30%', value: 0.3 },
     ];
 
+    const themeOptions: Array<{ label: string; value: Sticker3DTheme }> = [
+      { label: 'Vinyl Die-Cut', value: 'vinyl' },
+      { label: 'Holographic Foil', value: 'holographic' },
+      { label: 'Epoxy Dome', value: 'epoxy' },
+      { label: 'Enamel Pin', value: 'enamel' },
+    ];
+
+    const tiltOptions: Array<{ label: string; value: TiltMode }> = [
+      { label: 'Still (No Tilt)', value: 'none' },
+      { label: 'Subtle Tilt (5°)', value: 'subtle' },
+      { label: 'Dynamic Tilt (15°)', value: 'dynamic' },
+    ];
+
     const animationOptions: Array<{ label: string; value: IdleAnimation }> = [
       { label: 'None', value: 'none' },
       { label: 'Float', value: 'float' },
+      { label: 'Auto-Spin', value: 'spin' },
       { label: 'Gentle Sway', value: 'sway' },
     ];
 
     const template: MenuItemConstructorOptions[] = [
       {
-        label: 'Opacity',
-        submenu: opacityLevels.map((lvl) => ({
-          label: lvl.label,
-          type: 'radio',
-          checked: Math.abs(payload.opacity - lvl.value) < 0.05,
-          click: () => {
-            this.updateWidget(widgetId, { opacity: lvl.value });
-          },
-        })),
+        label: payload.mode === '2d' ? 'Switch to 3D' : 'Switch to 2D',
+        click: () => {
+          this.updateWidget(widgetId, {
+            mode: payload.mode === '2d' ? '3d' : '2d',
+          });
+        },
       },
+      ...(payload.mode === '3d'
+        ? ([
+            {
+              label: '3D Style / Theme',
+              submenu: themeOptions.map((t) => ({
+                label: t.label,
+                type: 'radio',
+                checked: payload.settings.theme === t.value,
+                click: () => {
+                  this.updateWidget(widgetId, {
+                    settings: { theme: t.value },
+                  });
+                },
+              })),
+            },
+            {
+              label: 'Motion',
+              submenu: tiltOptions.map((m) => ({
+                label: m.label,
+                type: 'radio',
+                checked: payload.settings.tiltMode === m.value,
+                click: () => {
+                  this.updateWidget(widgetId, {
+                    settings: { tiltMode: m.value },
+                  });
+                },
+              })),
+            },
+            {
+              label: 'Shadow',
+              submenu: [
+                {
+                  label: 'Toggle Desktop Contact Shadow',
+                  type: 'checkbox',
+                  checked: payload.settings.shadowEnabled,
+                  click: () => {
+                    this.updateWidget(widgetId, {
+                      settings: { shadowEnabled: !payload.settings.shadowEnabled },
+                    });
+                  },
+                },
+              ],
+            },
+          ] as MenuItemConstructorOptions[])
+        : []),
       {
         label: 'Idle Animation',
         submenu: animationOptions.map((anim) => ({
@@ -597,6 +716,17 @@ export class WidgetManager {
           checked: payload.settings.animation === anim.value,
           click: () => {
             this.updateWidget(widgetId, { settings: { animation: anim.value } });
+          },
+        })),
+      },
+      {
+        label: 'Opacity',
+        submenu: opacityLevels.map((lvl) => ({
+          label: lvl.label,
+          type: 'radio',
+          checked: Math.abs(payload.opacity - lvl.value) < 0.05,
+          click: () => {
+            this.updateWidget(widgetId, { opacity: lvl.value });
           },
         })),
       },
@@ -624,11 +754,6 @@ export class WidgetManager {
         click: () => {
           this.updateWidget(widgetId, { clickThrough: !payload.clickThrough });
         },
-      },
-      { type: 'separator' },
-      {
-        label: payload.mode === '2d' ? 'Switch to 3D (Phase 3)' : 'Switch to 2D',
-        enabled: false,
       },
       { type: 'separator' },
       {

@@ -4,75 +4,28 @@ import {
   ipcMain,
   screen,
   globalShortcut,
+  Tray,
   Menu,
   nativeImage,
-  Tray,
 } from 'electron';
 import path from 'path';
 import crypto from 'crypto';
 import { initDb } from './server/db';
 import { startLocalServer } from './server/index';
 import { widgetManager, WidgetStatePayload } from './widgetManager';
-import type { ServerConfig, WidgetBoundsInput } from './preload';
+import type { ServerConfig, WidgetBoundsInput, ScreenPoint } from './preload';
 
 let studioWindow: BrowserWindow | null = null;
-let tray: Tray | null = null;
 let serverConfig: ServerConfig | null = null;
-
-// 32x32 indigo/white sticker icon, kept inline so the tray works in dev and packaged builds.
-const TRAY_ICON_DATA_URL =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAjElEQVR42u3XQQoAIQgF0E7Xdu5/gM7R7EN0tK/9gYS2/UdRaGt/q2nUkdBUzLrp04e6YAhvMBSyE6xBysNDCHT4igiHI05GRWgBUsGvwhOOQHABvt49AiAirA2R4SEA6hVsAVL/hAu4gEqE+ycsB2QizL6gCsDbkFC0ZMebUoq2nGIwoRnNKIbTzHoBNFss5OuEKfsAAAAASUVORK5CYII=';
-
-function showStudioWindow(): void {
-  if (!studioWindow || studioWindow.isDestroyed()) {
-    createStudioWindow();
-    return;
-  }
-  if (studioWindow.isMinimized()) {
-    studioWindow.restore();
-  }
-  studioWindow.show();
-  studioWindow.focus();
-}
-
-function createTray(): void {
-  if (tray) return;
-
-  try {
-    const icon = nativeImage
-      .createFromDataURL(TRAY_ICON_DATA_URL)
-      .resize({ width: 16, height: 16 });
-    if (icon.isEmpty()) {
-      throw new Error('Tray icon failed to decode');
-    }
-    tray = new Tray(icon);
-    tray.setToolTip('StickerDesk');
-
-    tray.setContextMenu(
-      Menu.buildFromTemplate([
-        { label: 'Show Studio', click: showStudioWindow },
-        { type: 'separator' },
-        {
-          // Always-available escape hatch: click-through widgets ignore the mouse,
-          // so this menu is the reliable way to turn click-through back off.
-          label: 'Disable Click-Through on All Widgets',
-          click: () => widgetManager.setAllClickThrough(false),
-        },
-        { type: 'separator' },
-        { label: 'Quit StickerDesk', click: () => app.quit() },
-      ])
-    );
-
-    tray.on('double-click', showStudioWindow);
-  } catch (err: unknown) {
-    // A tray failure must not prevent the rest of the app from starting; the
-    // global hotkeys and Library button still provide click-through recovery.
-    console.warn('[StickerDesk] Could not create tray icon:', err);
-    tray = null;
-  }
-}
+let appTray: Tray | null = null;
 
 function createStudioWindow(): void {
+  if (studioWindow && !studioWindow.isDestroyed()) {
+    studioWindow.show();
+    studioWindow.focus();
+    return;
+  }
+
   studioWindow = new BrowserWindow({
     width: 1080,
     height: 720,
@@ -99,6 +52,45 @@ function createStudioWindow(): void {
   });
 }
 
+function setupSystemTray(): void {
+  // Generate a clean 16x16 indigo icon buffer so Tray always works without external icon assets
+  const size = 16;
+  const rgba = Buffer.alloc(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    rgba[i * 4] = 79;     // R
+    rgba[i * 4 + 1] = 70; // G
+    rgba[i * 4 + 2] = 229;// B
+    rgba[i * 4 + 3] = 255;// A
+  }
+  const icon = nativeImage.createFromBitmap(rgba, { width: size, height: size });
+  appTray = new Tray(icon);
+  appTray.setToolTip('StickerDesk');
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Open StickerDesk Studio',
+      click: () => createStudioWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: 'Disable Click-Through on All Widgets (Ctrl+Alt+C)',
+      click: () => widgetManager.setAllClickThrough(false),
+    },
+    {
+      label: 'Toggle Click-Through on All Widgets (Ctrl+Alt+Shift+C)',
+      click: () => widgetManager.toggleAllClickThrough(),
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit StickerDesk',
+      click: () => app.quit(),
+    },
+  ]);
+
+  appTray.setContextMenu(contextMenu);
+  appTray.on('double-click', () => createStudioWindow());
+}
+
 app.whenReady().then(async () => {
   const userDataPath = app.getPath('userData');
   initDb(userDataPath);
@@ -113,7 +105,6 @@ app.whenReady().then(async () => {
   };
 
   console.log(`[StickerDesk] Local Express API listening at ${serverConfig.baseUrl}`);
-  console.log(`[StickerDesk] Token: ${launchToken}`);
 
   ipcMain.handle('server:get-config', (): ServerConfig => {
     if (!serverConfig) {
@@ -148,10 +139,13 @@ app.whenReady().then(async () => {
     widgetManager.setAllClickThrough(enabled);
   });
 
-  // Restore all active desktop widgets on app launch
+  ipcMain.handle('screen:get-cursor', (): ScreenPoint => {
+    return screen.getCursorScreenPoint();
+  });
+
+  setupSystemTray();
   widgetManager.restoreActiveWidgets();
 
-  // Re-clamp widgets whenever a monitor is disconnected or resolution changes
   screen.on('display-removed', () => {
     widgetManager.reclampAllWidgets();
   });
@@ -159,33 +153,18 @@ app.whenReady().then(async () => {
     widgetManager.reclampAllWidgets();
   });
 
-  // Global hotkeys to disable click-through on all widgets. Registering two
-  // combinations means the escape hatch still works if another app already
-  // owns the first one.
-  const clickThroughRecovery = (): void => {
+  // Global hotkeys to guarantee click-through mode is never a trap
+  globalShortcut.register('CommandOrControl+Alt+C', () => {
     widgetManager.setAllClickThrough(false);
-  };
-  const primaryRegistered = globalShortcut.register('CommandOrControl+Alt+C', clickThroughRecovery);
-  const fallbackRegistered = globalShortcut.register(
-    'CommandOrControl+Alt+Shift+C',
-    clickThroughRecovery
-  );
-  if (!primaryRegistered) {
-    console.warn(
-      '[StickerDesk] Ctrl+Alt+C is already in use; use the tray menu to disable click-through.'
-    );
-  }
-  if (!fallbackRegistered) {
-    console.warn(
-      '[StickerDesk] Ctrl+Alt+Shift+C is already in use; use the tray menu to disable click-through.'
-    );
-  }
+  });
+  globalShortcut.register('CommandOrControl+Alt+Shift+C', () => {
+    widgetManager.toggleAllClickThrough();
+  });
 
   createStudioWindow();
-  createTray();
 
   app.on('activate', () => {
-    showStudioWindow();
+    createStudioWindow();
   });
 }).catch((err: unknown) => {
   console.error('[StickerDesk] Failed to initialize application:', err);
@@ -194,9 +173,9 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  if (tray) {
-    tray.destroy();
-    tray = null;
+  if (appTray) {
+    appTray.destroy();
+    appTray = null;
   }
 });
 
