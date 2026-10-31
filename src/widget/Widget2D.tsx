@@ -13,7 +13,7 @@ interface DragSession {
 export const Widget2D: React.FC = () => {
   const [widgetState, setWidgetState] = useState<WidgetStatePayload | null>(null);
   const [serverBaseUrl, setServerBaseUrl] = useState<string>('');
-  const [isHovered, setIsHovered] = useState<boolean>(false);
+  const [isHoveringCorner, setIsHoveringCorner] = useState<boolean>(false);
   const dragSessionRef = useRef<DragSession | null>(null);
 
   useEffect(() => {
@@ -107,6 +107,10 @@ export const Widget2D: React.FC = () => {
   const handleMouseDownMove = (e: React.MouseEvent<HTMLDivElement>): void => {
     // Only initiate drag on primary left-click (button === 0)
     if (e.button !== 0 || widgetState.locked || widgetState.clickThrough) return;
+    // Prevent any default browser gesture / native image drag that could
+    // accidentally scale or move the window during body drag.
+    e.preventDefault();
+    e.stopPropagation();
     dragSessionRef.current = {
       mode: 'move',
       startCursorScreenX: e.screenX,
@@ -130,25 +134,6 @@ export const Widget2D: React.FC = () => {
     };
   };
 
-  const handleWheelResize = (e: React.WheelEvent<HTMLDivElement>): void => {
-    // Require Ctrl+Wheel and ensure no drag/resize is active to prevent trackpad auto-zoom
-    if (
-      !e.ctrlKey ||
-      widgetState.locked ||
-      widgetState.clickThrough ||
-      dragSessionRef.current !== null ||
-      e.buttons !== 0
-    ) {
-      return;
-    }
-    const scaleFactor = e.deltaY < 0 ? 1.06 : 0.94;
-    const nextWidth = Math.max(
-      64,
-      Math.min(1200, Math.round(window.innerWidth * scaleFactor))
-    );
-    window.stickerdesk.setWidgetBounds(widgetState.id, { width: nextWidth });
-  };
-
   const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>): void => {
     e.preventDefault();
     e.stopPropagation();
@@ -163,7 +148,7 @@ export const Widget2D: React.FC = () => {
       ? 'stickerdesk-sway 4s ease-in-out infinite'
       : 'none';
 
-  const showResizeHandle = isHovered && !widgetState.locked && !widgetState.clickThrough;
+  const showResizeHandle = isHoveringCorner && !widgetState.locked && !widgetState.clickThrough;
 
   return (
     <>
@@ -182,10 +167,15 @@ export const Widget2D: React.FC = () => {
       </style>
 
       <div
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const threshold = Math.min(30, rect.width * 0.25);
+          const nearCorner =
+            e.clientX > rect.width - threshold &&
+            e.clientY > rect.height - threshold;
+          setIsHoveringCorner(nearCorner);
+        }}
         onMouseDown={handleMouseDownMove}
-        onWheel={handleWheelResize}
         onContextMenu={handleContextMenu}
         style={{
           width: '100vw',
@@ -200,6 +190,7 @@ export const Widget2D: React.FC = () => {
           cursor: widgetState.locked ? 'default' : 'grab',
           overflow: 'hidden',
           userSelect: 'none',
+          touchAction: 'none',
         }}
       >
         <img
@@ -219,14 +210,14 @@ export const Widget2D: React.FC = () => {
         {showResizeHandle && (
           <div
             onMouseDown={handleMouseDownResize}
-            title="Drag to resize (or Ctrl + Scroll)"
+            title="Drag to resize"
             style={{
               position: 'absolute',
-              right: '4px',
-              bottom: '4px',
-              width: '14px',
-              height: '14px',
-              borderRadius: '3px',
+              right: '1px',
+              bottom: '1px',
+              width: '10px',
+              height: '10px',
+              borderRadius: '2px',
               backgroundColor: 'rgba(79, 70, 229, 0.9)',
               border: '1.5px solid #ffffff',
               cursor: 'nwse-resize',
