@@ -149,19 +149,23 @@ export const PokemonCard: React.FC<PokemonCardProps> = ({
       >
         <div className="card__translater">
           <div className="card__rotator">
-            <img
-              className="card__back"
-              src="/img/pokemon/card-back.jpg"
-              alt="Card Back"
-              loading="lazy"
-              width="660"
-              height="921"
-            />
+            {!imgLoaded && (
+              <img
+                className="card__back"
+                src="/img/pokemon/card-back.jpg"
+                alt="Card Back"
+                loading="lazy"
+                decoding="async"
+                width="660"
+                height="921"
+              />
+            )}
             <div className="card__front">
               <img
                 src={cardImgSrc}
                 alt={card.name}
                 loading="lazy"
+                decoding="async"
                 width="660"
                 height="921"
                 onLoad={() => setImgLoaded(true)}

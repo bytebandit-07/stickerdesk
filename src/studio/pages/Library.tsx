@@ -138,6 +138,8 @@ export const Library: React.FC = () => {
   const [pokemonSearch, setPokemonSearch] = useState<string>('');
   const [pokemonFilter, setPokemonFilter] = useState<string>('all');
   const [pinningCardId, setPinningCardId] = useState<string | null>(null);
+  const [pokemonPage, setPokemonPage] = useState<number>(1);
+  const CARDS_PER_PAGE = 16;
 
   const fetchActiveWidgets = useCallback(async () => {
     try {
@@ -383,6 +385,84 @@ export const Library: React.FC = () => {
       return true;
     });
   }, [pokemonSearch, pokemonFilter]);
+
+  // Reset to first page when search or filter criteria change
+  useEffect(() => {
+    setPokemonPage(1);
+  }, [pokemonSearch, pokemonFilter]);
+
+  const totalPokemonPages = Math.max(1, Math.ceil(filteredPokemon.length / CARDS_PER_PAGE));
+  const currentSafePage = Math.min(pokemonPage, totalPokemonPages);
+
+  const pagedPokemon = useMemo(() => {
+    const startIndex = (currentSafePage - 1) * CARDS_PER_PAGE;
+    return filteredPokemon.slice(startIndex, startIndex + CARDS_PER_PAGE);
+  }, [filteredPokemon, currentSafePage]);
+
+  const renderPaginationControls = (): React.ReactNode => {
+    if (totalPokemonPages <= 1) return null;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          disabled={currentSafePage <= 1}
+          onClick={() => setPokemonPage((p) => Math.max(1, p - 1))}
+          style={{
+            padding: '6px 14px',
+            borderRadius: '6px',
+            border: '1px solid #333',
+            backgroundColor: currentSafePage <= 1 ? '#181818' : '#262626',
+            color: currentSafePage <= 1 ? '#555' : '#fff',
+            cursor: currentSafePage <= 1 ? 'not-allowed' : 'pointer',
+            fontSize: '0.82rem',
+            fontWeight: 600,
+          }}
+        >
+          ◀ Previous
+        </button>
+
+        {Array.from({ length: totalPokemonPages }, (_, i) => i + 1).map((pageNum) => (
+          <button
+            key={pageNum}
+            type="button"
+            onClick={() => setPokemonPage(pageNum)}
+            style={{
+              width: '34px',
+              height: '34px',
+              borderRadius: '6px',
+              border: '1px solid',
+              borderColor: pageNum === currentSafePage ? '#ec4899' : '#333',
+              backgroundColor: pageNum === currentSafePage ? '#ec4899' : '#1f1f1f',
+              color: pageNum === currentSafePage ? '#fff' : '#aaa',
+              fontWeight: 700,
+              fontSize: '0.82rem',
+              cursor: 'pointer',
+            }}
+          >
+            {pageNum}
+          </button>
+        ))}
+
+        <button
+          type="button"
+          disabled={currentSafePage >= totalPokemonPages}
+          onClick={() => setPokemonPage((p) => Math.min(totalPokemonPages, p + 1))}
+          style={{
+            padding: '6px 14px',
+            borderRadius: '6px',
+            border: '1px solid #333',
+            backgroundColor: currentSafePage >= totalPokemonPages ? '#181818' : '#262626',
+            color: currentSafePage >= totalPokemonPages ? '#555' : '#fff',
+            cursor: currentSafePage >= totalPokemonPages ? 'not-allowed' : 'pointer',
+            fontSize: '0.82rem',
+            fontWeight: 600,
+          }}
+        >
+          Next ▶
+        </button>
+      </div>
+    );
+  };
 
   return (
     <main
@@ -1019,10 +1099,28 @@ export const Library: React.FC = () => {
             </div>
           </div>
 
-          <p style={{ color: '#888', fontSize: '0.82rem', marginBottom: '16px' }}>
-            Showing {filteredPokemon.length} holographic cards. Hover over any card to view its live
-            3D holographic tilt and prism glare!
-          </p>
+          {/* Top Pagination & Stats Toolbar */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '18px',
+              flexWrap: 'wrap',
+              gap: '12px',
+            }}
+          >
+            <p style={{ color: '#aaa', fontSize: '0.84rem', margin: 0 }}>
+              Showing {filteredPokemon.length > 0 ? (currentSafePage - 1) * CARDS_PER_PAGE + 1 : 0}–
+              {Math.min(currentSafePage * CARDS_PER_PAGE, filteredPokemon.length)} of {filteredPokemon.length} holographic cards
+              {totalPokemonPages > 1 && (
+                <span style={{ color: '#ec4899', fontWeight: 600, marginLeft: '6px' }}>
+                  (Page {currentSafePage} of {totalPokemonPages})
+                </span>
+              )}
+            </p>
+            {renderPaginationControls()}
+          </div>
 
           {/* Cards Grid */}
           <div
@@ -1032,7 +1130,7 @@ export const Library: React.FC = () => {
               gap: '24px',
             }}
           >
-            {filteredPokemon.map((card) => {
+            {pagedPokemon.map((card) => {
               const isPinning = pinningCardId === card.id;
 
               return (
@@ -1092,6 +1190,18 @@ export const Library: React.FC = () => {
                 </div>
               );
             })}
+          </div>
+
+          {/* Bottom Pagination Controls */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              marginTop: '32px',
+              marginBottom: '16px',
+            }}
+          >
+            {renderPaginationControls()}
           </div>
         </section>
       )}

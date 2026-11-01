@@ -1,4 +1,3 @@
-
 .card {
 
   --grain: url("/img/grain.webp");
@@ -26,10 +25,9 @@
 
 }
 
-.card__shine,
-.card__glare {
-  
-  will-change: transform, opacity, background-image, background-size,
-    background-position, background-blend-mode, filter;
- 
+.card.interacting .card__shine,
+.card.interacting .card__glare,
+.card:hover .card__shine,
+.card:hover .card__glare {
+  will-change: transform, opacity, background-position;
 }

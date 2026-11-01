@@ -20,17 +20,28 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
-export async function imageUrlToImageData(src: string): Promise<ImageData> {
+export async function imageUrlToImageData(src: string, maxDimension = 1600): Promise<ImageData> {
   const img = await loadImage(src);
+  let w = img.naturalWidth || img.width;
+  let h = img.naturalHeight || img.height;
+
+  // Proportionally cap oversized images (e.g. 4K/6K wallpapers) to maxDimension.
+  // Prevents multi-gigabyte memory consumption while preserving crystal-clear Retina quality.
+  if (w > maxDimension || h > maxDimension) {
+    const scale = maxDimension / Math.max(w, h);
+    w = Math.max(1, Math.round(w * scale));
+    h = Math.max(1, Math.round(h * scale));
+  }
+
   const canvas = document.createElement('canvas');
-  canvas.width = img.naturalWidth || img.width;
-  canvas.height = img.naturalHeight || img.height;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     throw new Error('Could not initialize 2D canvas context');
   }
-  ctx.drawImage(img, 0, 0);
-  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, w, h);
+  return ctx.getImageData(0, 0, w, h);
 }
 
 export function imageDataToDataUrl(imageData: ImageData): string {
@@ -162,9 +173,9 @@ export function extractAlphaMask(source: ImageData, threshold = 16): Uint8Array 
 }
 
 /**
- * Applies a continuous circular brush stroke from `from` to `to`.
- * - 'erase': zeroes out the pixel alpha channel.
- * - 'restore': restores original RGB + alpha values from `referenceOriginal`.
+ * Applies a continuous circular brush stroke from `from` to `to` with variable hardness/feathering.
+ * @param hardness Normalized hardness in [0.0, 1.0] (0.0 = fully feathered Gaussian-like falloff, 1.0 = razor sharp).
+ * @returns The bounding box (PixelCrop) of the modified pixels for high-speed dirty-rectangle canvas blits.
  */
 export function applyBrushSegment(
   working: ImageData,
@@ -172,46 +183,170 @@ export function applyBrushSegment(
   from: Point2D,
   to: Point2D,
   radius: number,
-  mode: 'erase' | 'restore'
-): void {
+  mode: 'erase' | 'restore',
+  hardness = 0.85
+): PixelCrop {
   const width = working.width;
   const height = working.height;
   const workData = working.data;
   const origData = referenceOriginal.data;
 
+  const safeRadius = Math.max(1, radius);
+  const clampedHardness = Math.max(0, Math.min(1, hardness));
+  const innerRadius = safeRadius * clampedHardness;
+  const innerRadiusSq = innerRadius * innerRadius;
+  const falloffSpan = Math.max(1e-4, safeRadius - innerRadius);
+
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const dist = Math.hypot(dx, dy);
-  const steps = Math.max(1, Math.ceil(dist / Math.max(1, radius * 0.25)));
-  const rSq = radius * radius;
+  const stepSpacing = Math.max(1, safeRadius * (clampedHardness < 0.95 ? 0.3 : 0.45));
+  const steps = Math.max(1, Math.ceil(dist / stepSpacing));
+  const rSq = safeRadius * safeRadius;
+
+  const minModX = Math.max(0, Math.floor(Math.min(from.x, to.x) - safeRadius));
+  const maxModX = Math.min(width - 1, Math.ceil(Math.max(from.x, to.x) + safeRadius));
+  const minModY = Math.max(0, Math.floor(Math.min(from.y, to.y) - safeRadius));
+  const maxModY = Math.min(height - 1, Math.ceil(Math.max(from.y, to.y) + safeRadius));
 
   for (let s = 0; s <= steps; s++) {
     const t = s / steps;
     const cx = from.x + dx * t;
     const cy = from.y + dy * t;
 
-    const startX = Math.max(0, Math.floor(cx - radius));
-    const endX = Math.min(width - 1, Math.ceil(cx + radius));
-    const startY = Math.max(0, Math.floor(cy - radius));
-    const endY = Math.min(height - 1, Math.ceil(cy + radius));
+    const startX = Math.max(0, Math.floor(cx - safeRadius));
+    const endX = Math.min(width - 1, Math.ceil(cx + safeRadius));
+    const startY = Math.max(0, Math.floor(cy - safeRadius));
+    const endY = Math.min(height - 1, Math.ceil(cy + safeRadius));
 
     for (let y = startY; y <= endY; y++) {
       const yOffset = y * width;
       const distY = y - cy;
       for (let x = startX; x <= endX; x++) {
         const distX = x - cx;
-        if (distX * distX + distY * distY <= rSq) {
+        const dSq = distX * distX + distY * distY;
+        if (dSq <= rSq) {
+          let strength = 1.0;
+          if (dSq > innerRadiusSq) {
+            const d = Math.sqrt(dSq);
+            const norm = Math.max(0, Math.min(1, 1 - (d - innerRadius) / falloffSpan));
+            // Smoothstep falloff curve
+            strength = norm * norm * (3 - 2 * norm);
+          }
+
           const idx = (yOffset + x) * 4;
           if (mode === 'erase') {
-            workData[idx + 3] = 0;
+            const currentAlpha = workData[idx + 3];
+            const targetAlpha = Math.round(currentAlpha * (1 - strength));
+            if (targetAlpha < currentAlpha) {
+              workData[idx + 3] = targetAlpha;
+            }
           } else {
+            const origAlpha = origData[idx + 3];
+            const currentAlpha = workData[idx + 3];
+            const blendedAlpha = Math.min(
+              origAlpha,
+              Math.round(currentAlpha + (origAlpha - currentAlpha) * strength)
+            );
             workData[idx] = origData[idx];
             workData[idx + 1] = origData[idx + 1];
             workData[idx + 2] = origData[idx + 2];
-            workData[idx + 3] = origData[idx + 3];
+            if (blendedAlpha > currentAlpha) {
+              workData[idx + 3] = blendedAlpha;
+            }
           }
         }
       }
     }
   }
+
+  return {
+    x: minModX,
+    y: minModY,
+    width: Math.max(1, maxModX - minModX + 1),
+    height: Math.max(1, maxModY - minModY + 1),
+  };
+}
+
+/**
+ * 1-Click Edge Defringe Filter:
+ * 1. Erodes 1-2px semi-transparent boundary fringe artifacts left by AI background segmentation.
+ * 2. Decontaminates edge RGB colors by bleeding opaque interior pixel colors outward into the alpha ramp.
+ */
+export function defringeImageData(source: ImageData, strengthPx = 1.5): ImageData {
+  const { width, height } = source;
+  const src = source.data;
+  const out = cloneImageData(source);
+  const dst = out.data;
+
+  const alphaCopy = new Uint8ClampedArray(width * height);
+  for (let i = 0; i < width * height; i++) {
+    alphaCopy[i] = src[i * 4 + 3];
+  }
+
+  // Pass 1: Erode low-alpha boundary halo and sharpen soft semi-transparent fringe
+  for (let y = 1; y < height - 1; y++) {
+    const row = y * width;
+    for (let x = 1; x < width - 1; x++) {
+      const i = row + x;
+      const a = alphaCopy[i];
+      if (a === 0) continue;
+
+      const minNeighborAlpha = Math.min(
+        alphaCopy[i - 1],
+        alphaCopy[i + 1],
+        alphaCopy[i - width],
+        alphaCopy[i + width],
+        alphaCopy[i - width - 1],
+        alphaCopy[i - width + 1],
+        alphaCopy[i + width - 1],
+        alphaCopy[i + width + 1]
+      );
+
+      // If pixel sits on the outer boundary next to transparency
+      if (minNeighborAlpha < 210) {
+        const eroded = Math.max(0, a - Math.round(78 * strengthPx));
+        // Apply contrast ramp to eliminate wispy ghost pixels
+        dst[i * 4 + 3] = eroded < 42 ? 0 : Math.min(255, Math.round((eroded - 42) * 1.25));
+      }
+    }
+  }
+
+  // Pass 2: Color decontamination — replace semi-transparent edge RGB with nearest solid interior RGB
+  for (let y = 2; y < height - 2; y++) {
+    const row = y * width;
+    for (let x = 2; x < width - 2; x++) {
+      const i = row + x;
+      const a = dst[i * 4 + 3];
+      if (a > 0 && a < 235) {
+        let rSum = 0;
+        let gSum = 0;
+        let bSum = 0;
+        let count = 0;
+
+        for (let dy = -2; dy <= 2; dy++) {
+          const nRow = (y + dy) * width;
+          for (let dx = -2; dx <= 2; dx++) {
+            const ni = nRow + (x + dx);
+            if (alphaCopy[ni] >= 240) {
+              const p = ni * 4;
+              rSum += src[p];
+              gSum += src[p + 1];
+              bSum += src[p + 2];
+              count++;
+            }
+          }
+        }
+
+        if (count > 0) {
+          const p = i * 4;
+          dst[p] = Math.round(rSum / count);
+          dst[p + 1] = Math.round(gSum / count);
+          dst[p + 2] = Math.round(bSum / count);
+        }
+      }
+    }
+  }
+
+  return out;
 }

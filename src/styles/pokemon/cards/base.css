@@ -52,7 +52,7 @@
   z-index: calc(var(--card-scale) * 2);
   
   /* every little helps! */
-  will-change: transform, visibility, z-index;
+  /* will-change on hover only */
 
   /* this prevents major problems in firefox, but also causes a bit of
   clipping as the card animates to/from active state. worth it. */
@@ -126,7 +126,7 @@
 .card__rotator {
   display: grid;
   perspective: 600px;
-  will-change: transform, box-shadow;
+  /* will-change on hover only */
   transform-origin: center;
   -webkit-transform-origin: center;
   transform-style: preserve-3d;
@@ -348,4 +348,9 @@ Shine & Glare Effects
 .card[data-rarity="rare holo cosmos"][data-supertype="trainer"] .card__glare:after,
 .card[data-rarity$="reverse holo"][data-supertype="trainer"] .card__glare:after {
   clip-path: var(--clip-trainer);
+}
+
+
+.card.interacting, .card.interacting .card__translater, .card.interacting .card__rotator {
+  will-change: transform, box-shadow;
 }
