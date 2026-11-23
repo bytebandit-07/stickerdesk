@@ -23,6 +23,8 @@ interface StudioState {
   openEditorWithFile: (file: File | null) => void;
   fetchStickers: () => Promise<void>;
   saveSticker: (name: string, imageBase64: string) => Promise<StickerItem>;
+  renameSticker: (stickerId: string, newName: string) => Promise<void>;
+  duplicateSticker: (stickerId: string) => Promise<StickerItem>;
   pinStickerToDesktop: (stickerId: string) => Promise<void>;
   deleteSticker: (stickerId: string) => Promise<void>;
   disableAllClickThrough: () => Promise<void>;
@@ -90,6 +92,61 @@ export const useStudioStore = create<StudioState>((set) => ({
       serverBaseUrl: config.baseUrl,
     }));
     return created;
+  },
+
+  renameSticker: async (stickerId: string, newName: string): Promise<void> => {
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      throw new Error('Sticker name cannot be empty');
+    }
+
+    const config = await window.stickerdesk.getServerConfig();
+    const response = await fetch(
+      `${config.baseUrl}/stickers/${encodeURIComponent(stickerId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-stickerdesk-token': config.token,
+        },
+        body: JSON.stringify({ name: trimmed }),
+      }
+    );
+
+    if (!response.ok) {
+      const errBody = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(errBody.error ?? `Failed to rename sticker (HTTP ${response.status})`);
+    }
+
+    const updated = (await response.json()) as StickerItem;
+    set((state) => ({
+      stickers: state.stickers.map((s) => (s.id === stickerId ? updated : s)),
+    }));
+  },
+
+  duplicateSticker: async (stickerId: string): Promise<StickerItem> => {
+    const config = await window.stickerdesk.getServerConfig();
+    const response = await fetch(
+      `${config.baseUrl}/stickers/${encodeURIComponent(stickerId)}/duplicate`,
+      {
+        method: 'POST',
+        headers: {
+          'x-stickerdesk-token': config.token,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errBody = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(errBody.error ?? `Failed to duplicate sticker (HTTP ${response.status})`);
+    }
+
+    const duplicated = (await response.json()) as StickerItem;
+    set((state) => ({
+      stickers: [duplicated, ...state.stickers],
+      serverBaseUrl: config.baseUrl,
+    }));
+    return duplicated;
   },
 
   pinStickerToDesktop: async (stickerId: string): Promise<void> => {

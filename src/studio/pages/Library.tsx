@@ -124,6 +124,8 @@ export const Library: React.FC = () => {
     setActiveView,
     pinStickerToDesktop,
     disableAllClickThrough,
+    renameSticker,
+    duplicateSticker,
   } = useStudioStore();
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -133,6 +135,12 @@ export const Library: React.FC = () => {
   const [activeWidgets, setActiveWidgets] = useState<ActiveWidgetRow[]>([]);
   const [localError, setLocalError] = useState<string | null>(null);
   const [localSuccess, setLocalSuccess] = useState<string | null>(null);
+
+  // My Stickers Search & Management
+  const [stickerSearch, setStickerSearch] = useState<string>('');
+  const [editingStickerId, setEditingStickerId] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState<string>('');
+  const [busyStickerId, setBusyStickerId] = useState<string | null>(null);
 
   // Pokemon Vault filter and search
   const [pokemonSearch, setPokemonSearch] = useState<string>('');
@@ -211,6 +219,82 @@ export const Library: React.FC = () => {
       setLocalError(err instanceof Error ? err.message : 'Failed to delete sticker');
     }
   };
+
+  const startRenaming = (sticker: { id: string; name: string }): void => {
+    setEditingStickerId(sticker.id);
+    setEditingNameValue(sticker.name);
+    setLocalError(null);
+  };
+
+  const cancelRenaming = (): void => {
+    setEditingStickerId(null);
+    setEditingNameValue('');
+  };
+
+  const commitRename = async (stickerId: string): Promise<void> => {
+    const trimmed = editingNameValue.trim();
+    if (!trimmed) {
+      setLocalError('Sticker name cannot be empty');
+      return;
+    }
+    setLocalError(null);
+    setBusyStickerId(stickerId);
+    try {
+      await renameSticker(stickerId, trimmed);
+      setEditingStickerId(null);
+      setEditingNameValue('');
+      setLocalSuccess(`Renamed sticker to "${trimmed}"`);
+    } catch (err: unknown) {
+      setLocalError(err instanceof Error ? err.message : 'Failed to rename sticker');
+    } finally {
+      setBusyStickerId(null);
+    }
+  };
+
+  const handleDuplicate = async (stickerId: string): Promise<void> => {
+    setLocalError(null);
+    setBusyStickerId(stickerId);
+    try {
+      const copy = await duplicateSticker(stickerId);
+      setLocalSuccess(`Duplicated as "${copy.name}"`);
+      await fetchActiveWidgets();
+    } catch (err: unknown) {
+      setLocalError(err instanceof Error ? err.message : 'Failed to duplicate sticker');
+    } finally {
+      setBusyStickerId(null);
+    }
+  };
+
+  const handleExportPng = async (sticker: { name: string; file_path: string }): Promise<void> => {
+    setLocalError(null);
+    try {
+      const config = await window.stickerdesk.getServerConfig();
+      const downloadUrl = `${config.baseUrl}/files/stickers/${encodeURIComponent(sticker.file_path)}`;
+      const res = await fetch(downloadUrl);
+      if (!res.ok) {
+        throw new Error(`Failed to download sticker image (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      const cleanName = sticker.name.replace(/[/\\?%*:|"<>]/g, '_').trim() || 'sticker';
+      a.download = `${cleanName}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      setLocalSuccess(`Exported "${sticker.name}" as PNG`);
+    } catch (err: unknown) {
+      setLocalError(err instanceof Error ? err.message : 'Failed to export sticker');
+    }
+  };
+
+  const filteredStickers = useMemo(() => {
+    const q = stickerSearch.trim().toLowerCase();
+    if (!q) return stickers;
+    return stickers.filter((s) => s.name.toLowerCase().includes(q));
+  }, [stickers, stickerSearch]);
 
   const patchWidget = async (
     widgetId: string,
@@ -874,162 +958,402 @@ export const Library: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-                gap: '16px',
-              }}
-            >
-              {stickers.map((sticker) => {
-                const isConfirming = confirmDeleteId === sticker.id;
-
-                return (
-                  <div
-                    key={sticker.id}
+            <>
+              {/* Search Toolbar for My Stickers */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  marginBottom: '16px',
+                  backgroundColor: '#191919',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: '1px solid #2d2d2d',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '1', minWidth: '220px' }}>
+                  <span style={{ fontSize: '0.9rem', color: '#888' }}>🔍</span>
+                  <input
+                    type="text"
+                    placeholder="Search stickers by name..."
+                    value={stickerSearch}
+                    onChange={(e) => setStickerSearch(e.target.value)}
                     style={{
-                      backgroundColor: '#1c1c1c',
-                      border: '1px solid #2e2e2e',
-                      borderRadius: '10px',
-                      padding: '12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      gap: '10px',
+                      flex: 1,
+                      padding: '7px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid #383838',
+                      backgroundColor: '#111',
+                      color: '#fff',
+                      fontSize: '0.84rem',
+                      outline: 'none',
+                    }}
+                  />
+                  {stickerSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setStickerSearch('')}
+                      title="Clear search"
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: '5px',
+                        border: '1px solid #444',
+                        backgroundColor: '#262626',
+                        color: '#aaa',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                      }}
+                    >
+                      Clear ✕
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#888' }}>
+                  {stickerSearch.trim()
+                    ? `Found ${filteredStickers.length} of ${stickers.length} stickers`
+                    : `${stickers.length} sticker${stickers.length === 1 ? '' : 's'}`}
+                </div>
+              </div>
+
+              {filteredStickers.length === 0 ? (
+                <div
+                  style={{
+                    marginTop: '20px',
+                    padding: '40px 20px',
+                    borderRadius: '10px',
+                    border: '1px dashed #333',
+                    backgroundColor: '#181818',
+                    textAlign: 'center',
+                  }}
+                >
+                  <p style={{ margin: '0 0 10px 0', fontSize: '0.95rem', color: '#e5e7eb' }}>
+                    No stickers found matching &ldquo;{stickerSearch}&rdquo;
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setStickerSearch('')}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: '1px solid #444',
+                      backgroundColor: '#262626',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontSize: '0.82rem',
                     }}
                   >
-                    <div
-                      style={{
-                        width: '100%',
-                        height: '150px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '6px',
-                        backgroundImage:
-                          'linear-gradient(45deg, #252525 25%, transparent 25%), linear-gradient(-45deg, #252525 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #252525 75%), linear-gradient(-45deg, transparent 75%, #252525 75%)',
-                        backgroundSize: '16px 16px',
-                        backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
-                        backgroundColor: '#181818',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <img
-                        src={`${serverBaseUrl}/files/stickers/${sticker.thumb_path}`}
-                        alt={sticker.name}
-                        style={{
-                          maxWidth: '90%',
-                          maxHeight: '90%',
-                          objectFit: 'contain',
-                        }}
-                      />
-                    </div>
+                    Clear Search
+                  </button>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+                    gap: '16px',
+                  }}
+                >
+                  {filteredStickers.map((sticker) => {
+                    const isConfirming = confirmDeleteId === sticker.id;
+                    const isEditing = editingStickerId === sticker.id;
+                    const isBusy = busyStickerId === sticker.id;
 
-                    <div style={{ width: '100%', textAlign: 'left' }}>
+                    return (
                       <div
+                        key={sticker.id}
                         style={{
-                          fontSize: '0.9rem',
-                          fontWeight: 600,
-                          color: '#f3f4f6',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
+                          backgroundColor: '#1c1c1c',
+                          border: '1px solid #2e2e2e',
+                          borderRadius: '10px',
+                          padding: '12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '10px',
+                          opacity: isBusy ? 0.7 : 1,
+                          transition: 'opacity 0.15s ease',
                         }}
                       >
-                        {sticker.name}
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '2px' }}>
-                        {sticker.width} × {sticker.height} px
-                      </div>
-                    </div>
+                        {/* Thumbnail */}
+                        <div
+                          style={{
+                            width: '100%',
+                            height: '140px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderRadius: '6px',
+                            backgroundImage:
+                              'linear-gradient(45deg, #252525 25%, transparent 25%), linear-gradient(-45deg, #252525 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #252525 75%), linear-gradient(-45deg, transparent 75%, #252525 75%)',
+                            backgroundSize: '16px 16px',
+                            backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+                            backgroundColor: '#181818',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <img
+                            src={`${serverBaseUrl}/files/stickers/${sticker.thumb_path}`}
+                            alt={sticker.name}
+                            style={{
+                              maxWidth: '90%',
+                              maxHeight: '90%',
+                              objectFit: 'contain',
+                            }}
+                          />
+                        </div>
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        width: '100%',
-                        gap: '6px',
-                        marginTop: 'auto',
-                      }}
-                    >
-                      {!isConfirming ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => void handlePinSticker(sticker.id)}
-                            style={{
-                              flex: 1,
-                              padding: '8px 10px',
-                              borderRadius: '6px',
-                              border: 'none',
-                              backgroundColor: '#10b981',
-                              color: '#fff',
-                              fontWeight: 600,
-                              fontSize: '0.8rem',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Pin to Desktop
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(sticker.id)}
-                            style={{
-                              padding: '8px 10px',
-                              borderRadius: '6px',
-                              border: '1px solid #4b2323',
-                              backgroundColor: '#2a1818',
-                              color: '#fca5a5',
-                              fontWeight: 600,
-                              fontSize: '0.8rem',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => void deleteSticker(sticker.id)}
-                            style={{
-                              flex: 1,
-                              padding: '8px 10px',
-                              borderRadius: '6px',
-                              border: 'none',
-                              backgroundColor: '#ef4444',
-                              color: '#fff',
-                              fontWeight: 700,
-                              fontSize: '0.8rem',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Confirm Delete?
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(null)}
-                            title="Cancel Delete"
-                            style={{
-                              padding: '8px 10px',
-                              borderRadius: '6px',
-                              border: '1px solid #444',
-                              backgroundColor: '#2a2a2a',
-                              color: '#ddd',
-                              fontWeight: 600,
-                              fontSize: '0.8rem',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            ✕
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                        {/* Sticker Name & Dimensions / Inline Rename Editor */}
+                        <div style={{ width: '100%', textAlign: 'left' }}>
+                          {isEditing ? (
+                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                              <input
+                                type="text"
+                                autoFocus
+                                value={editingNameValue}
+                                maxLength={120}
+                                onChange={(e) => setEditingNameValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') void commitRename(sticker.id);
+                                  if (e.key === 'Escape') cancelRenaming();
+                                }}
+                                disabled={isBusy}
+                                style={{
+                                  flex: 1,
+                                  padding: '4px 6px',
+                                  borderRadius: '4px',
+                                  border: '1px solid #4f46e5',
+                                  backgroundColor: '#111',
+                                  color: '#fff',
+                                  fontSize: '0.82rem',
+                                  outline: 'none',
+                                  minWidth: 0,
+                                }}
+                              />
+                              <button
+                                type="button"
+                                title="Save Rename (Enter)"
+                                disabled={isBusy}
+                                onClick={() => void commitRename(sticker.id)}
+                                style={{
+                                  padding: '4px 7px',
+                                  borderRadius: '4px',
+                                  border: 'none',
+                                  backgroundColor: '#10b981',
+                                  color: '#fff',
+                                  cursor: 'pointer',
+                                  fontWeight: 700,
+                                  fontSize: '0.8rem',
+                                }}
+                              >
+                                ✓
+                              </button>
+                              <button
+                                type="button"
+                                title="Cancel (Esc)"
+                                disabled={isBusy}
+                                onClick={cancelRenaming}
+                                style={{
+                                  padding: '4px 7px',
+                                  borderRadius: '4px',
+                                  border: '1px solid #444',
+                                  backgroundColor: '#262626',
+                                  color: '#aaa',
+                                  cursor: 'pointer',
+                                  fontSize: '0.8rem',
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <div>
+                              <div
+                                title={sticker.name}
+                                style={{
+                                  fontSize: '0.88rem',
+                                  fontWeight: 600,
+                                  color: '#f3f4f6',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                {sticker.name}
+                              </div>
+                              <div style={{ fontSize: '0.74rem', color: '#888', marginTop: '2px' }}>
+                                {sticker.width} × {sticker.height} px
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Actions Area */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            width: '100%',
+                            gap: '6px',
+                            marginTop: 'auto',
+                          }}
+                        >
+                          {isConfirming ? (
+                            <div style={{ display: 'flex', gap: '6px', width: '100%' }}>
+                              <button
+                                type="button"
+                                onClick={() => void deleteSticker(sticker.id)}
+                                disabled={isBusy}
+                                style={{
+                                  flex: 1,
+                                  padding: '7px 10px',
+                                  borderRadius: '6px',
+                                  border: 'none',
+                                  backgroundColor: '#ef4444',
+                                  color: '#fff',
+                                  fontWeight: 700,
+                                  fontSize: '0.78rem',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Confirm Delete?
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(null)}
+                                title="Cancel Delete"
+                                disabled={isBusy}
+                                style={{
+                                  padding: '7px 10px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #444',
+                                  backgroundColor: '#2a2a2a',
+                                  color: '#ddd',
+                                  fontWeight: 600,
+                                  fontSize: '0.78rem',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void handlePinSticker(sticker.id)}
+                                disabled={isBusy}
+                                style={{
+                                  width: '100%',
+                                  padding: '7px 10px',
+                                  borderRadius: '6px',
+                                  border: 'none',
+                                  backgroundColor: '#10b981',
+                                  color: '#fff',
+                                  fontWeight: 600,
+                                  fontSize: '0.8rem',
+                                  cursor: isBusy ? 'not-allowed' : 'pointer',
+                                }}
+                              >
+                                📌 Pin to Desktop
+                              </button>
+
+                              <div
+                                style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: 'repeat(4, 1fr)',
+                                  gap: '4px',
+                                  width: '100%',
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => startRenaming(sticker)}
+                                  disabled={isBusy}
+                                  title="Rename sticker"
+                                  style={{
+                                    padding: '5px 2px',
+                                    borderRadius: '5px',
+                                    border: '1px solid #333',
+                                    backgroundColor: '#222',
+                                    color: '#ccc',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    textAlign: 'center',
+                                  }}
+                                >
+                                  ✏️ Name
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDuplicate(sticker.id)}
+                                  disabled={isBusy}
+                                  title="Duplicate sticker (creates a copy)"
+                                  style={{
+                                    padding: '5px 2px',
+                                    borderRadius: '5px',
+                                    border: '1px solid #333',
+                                    backgroundColor: '#222',
+                                    color: '#ccc',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    textAlign: 'center',
+                                  }}
+                                >
+                                  📋 Copy
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleExportPng(sticker)}
+                                  disabled={isBusy}
+                                  title="Export full-res PNG file"
+                                  style={{
+                                    padding: '5px 2px',
+                                    borderRadius: '5px',
+                                    border: '1px solid #333',
+                                    backgroundColor: '#222',
+                                    color: '#ccc',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    textAlign: 'center',
+                                  }}
+                                >
+                                  💾 PNG
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(sticker.id)}
+                                  disabled={isBusy}
+                                  title="Delete sticker from library"
+                                  style={{
+                                    padding: '5px 2px',
+                                    borderRadius: '5px',
+                                    border: '1px solid #4b2323',
+                                    backgroundColor: '#2a1818',
+                                    color: '#fca5a5',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    textAlign: 'center',
+                                  }}
+                                >
+                                  🗑️ Del
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
         </>
       )}

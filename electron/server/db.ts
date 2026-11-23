@@ -4,6 +4,7 @@ import fs from 'fs';
 
 let dbInstance: Database.Database | null = null;
 let stickersDirPath: string | null = null;
+let modelsDirPath: string | null = null;
 
 export function initDb(userDataPath: string): Database.Database {
   if (dbInstance) {
@@ -14,6 +15,10 @@ export function initDb(userDataPath: string): Database.Database {
   const stickersDir = path.join(dataDir, 'stickers');
   fs.mkdirSync(stickersDir, { recursive: true });
   stickersDirPath = stickersDir;
+
+  const modelsDir = path.join(dataDir, 'models', 'imgly');
+  fs.mkdirSync(modelsDir, { recursive: true });
+  modelsDirPath = modelsDir;
 
   const dbPath = path.join(dataDir, 'db.sqlite');
   const db = new Database(dbPath);
@@ -85,4 +90,11 @@ export function getStickersDir(): string {
     throw new Error('Stickers directory not initialized. Call initDb() first.');
   }
   return stickersDirPath;
+}
+
+export function getModelsDir(): string {
+  if (!modelsDirPath) {
+    throw new Error('Models directory not initialized. Call initDb() first.');
+  }
+  return modelsDirPath;
 }

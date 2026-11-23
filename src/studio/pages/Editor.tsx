@@ -487,9 +487,11 @@ export const Editor: React.FC = () => {
     setBgProgressText('Loading high-precision ISNet model...');
 
     try {
-      const sourceDataUrl = imageDataToDataUrl(currentEntry.working);
-      const blob = await removeBackground(sourceDataUrl, {
-        model: 'isnet',
+      const config = await window.stickerdesk.getServerConfig();
+      const publicPath = `${config.baseUrl}/imgly/`;
+      const blob = await removeBackground(currentEntry.working, {
+        publicPath,
+        model: 'isnet_fp16',
         output: {
           quality: 1.0,
         },
@@ -497,7 +499,8 @@ export const Editor: React.FC = () => {
           if (total > 0) {
             const pct = Math.min(100, Math.round((current / total) * 100));
             setBgProgressPct(pct);
-            setBgProgressText(`${key} (${pct}%)`);
+            const label = key.replace(/^fetch:\/?(models\/|onnxruntime-web\/)?/, '');
+            setBgProgressText(`Loading ${label} (${pct}%)`);
           }
         },
       });
@@ -512,6 +515,7 @@ export const Editor: React.FC = () => {
         URL.revokeObjectURL(resultUrl);
       }
     } catch (err: unknown) {
+      console.error('[AI Background Removal Error]:', err);
       setStatusError(
         err instanceof Error
           ? `Background removal failed: ${err.message}`

@@ -7,6 +7,7 @@ import { Server } from 'http';
 import { stickersRouter } from './routes/stickers';
 import { widgetsRouter } from './routes/widgets';
 import { settingsRouter } from './routes/settings';
+import { modelsRouter } from './routes/models';
 import { getStickersDir } from './db';
 
 export interface ServerInstance {
@@ -53,6 +54,7 @@ export function startLocalServer(token: string): Promise<ServerInstance> {
     app.use('/stickers', stickersRouter);
     app.use('/widgets', widgetsRouter);
     app.use('/settings', settingsRouter);
+    app.use('/imgly', modelsRouter);
 
     const server = app.listen(0, '127.0.0.1', () => {
       const address = server.address() as AddressInfo;

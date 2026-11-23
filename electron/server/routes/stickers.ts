@@ -261,6 +261,78 @@ stickersRouter.post('/', (req: Request, res: Response) => {
 
 
 
+stickersRouter.post('/:id/duplicate', (req: Request, res: Response) => {
+  const stickerId = req.params.id;
+  const db = getDb();
+
+  const existingRow = db.prepare('SELECT * FROM stickers WHERE id = ?').get(stickerId);
+  if (!existingRow) {
+    res.status(404).json({ error: 'Sticker not found' });
+    return;
+  }
+
+  const parsedExisting = StickerRowSchema.safeParse(existingRow);
+  if (!parsedExisting.success) {
+    res.status(500).json({ error: 'Corrupted source sticker record' });
+    return;
+  }
+
+  const existing = parsedExisting.data;
+  const stickersDir = getStickersDir();
+  const srcFilePath = path.join(stickersDir, path.basename(existing.file_path));
+  const srcThumbPath = path.join(stickersDir, path.basename(existing.thumb_path));
+
+  if (!fs.existsSync(srcFilePath)) {
+    res.status(404).json({ error: 'Source sticker PNG file missing on disk' });
+    return;
+  }
+
+  const newId = crypto.randomUUID();
+  const newFileName = `${newId}.png`;
+  const newThumbFileName = `${newId}_thumb.png`;
+  const destFilePath = path.join(stickersDir, newFileName);
+  const destThumbPath = path.join(stickersDir, newThumbFileName);
+
+  try {
+    fs.copyFileSync(srcFilePath, destFilePath);
+    if (fs.existsSync(srcThumbPath)) {
+      fs.copyFileSync(srcThumbPath, destThumbPath);
+    } else {
+      fs.copyFileSync(srcFilePath, destThumbPath);
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to copy sticker files';
+    res.status(500).json({ error: message });
+    return;
+  }
+
+  const copyName = `${existing.name} (Copy)`.slice(0, 120);
+  const createdAt = new Date().toISOString();
+
+  db.prepare(
+    `INSERT INTO stickers (id, name, file_path, thumb_path, width, height, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    newId,
+    copyName,
+    newFileName,
+    newThumbFileName,
+    existing.width,
+    existing.height,
+    createdAt
+  );
+
+  const createdRow = db.prepare('SELECT * FROM stickers WHERE id = ?').get(newId);
+  const parsedCreated = StickerRowSchema.safeParse(createdRow);
+
+  if (!parsedCreated.success) {
+    res.status(500).json({ error: 'Failed to read duplicated sticker record' });
+    return;
+  }
+
+  res.status(201).json(parsedCreated.data);
+});
+
 stickersRouter.patch('/:id', (req: Request, res: Response) => {
 
   const validation = PatchStickerSchema.safeParse(req.body);
